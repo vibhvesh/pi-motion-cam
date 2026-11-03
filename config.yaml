@@ -1,41 +1,143 @@
+# Pi Motion Cam — modular smart camera. Enable the modules you want under `modules:`.
+# Geometry (lines/zones) uses normalized coordinates: [x, y] with 0..1 = fraction of frame width/height.
+# Tip: draw zones/lines in the web app (https://vibhvesh.github.io/pi-motion-cam/) and use "Export Pi config".
+# active_hours: "" = always, or "HH:MM-HH:MM" (can wrap midnight, comma-separate several ranges).
+
 camera:
-  lores_size: [320, 240]     # low-res stream used for motion detection
-  main_size: [2304, 1296]    # full-res capture size
+  lores_size: [320, 240]     # low-res stream for motion + tamper (every frame)
+  main_size: [2304, 1296]    # full-res frame for detection + snapshots
   framerate: 10
+
 motion:
-  pixel_threshold: 25        # per-pixel diff threshold (0-255)
-  min_area: 800              # min changed pixels (lores) to count as motion
-  blur: 21                   # gaussian blur kernel (odd)
-  cooldown_seconds: 30       # min time between alerts
+  pixel_threshold: 25
+  min_area: 800              # changed lores pixels that count as motion
+  blur: 21
   warmup_seconds: 2
-person_detection:
-  enabled: true
-  require_person: true       # only alert if a person is detected
+
+detector:
+  type: hog                  # hog (person only, no download) | mobilenet_ssd (person, animals, vehicles: ./install.sh --dnn)
+  model_dir: models
+  confidence: 0.4            # mobilenet_ssd score / HOG weight threshold
+  interval_seconds: 0.3      # detection rate while something is moving/tracked
+  idle_interval_seconds: 2.0 # detection rate when idle (keeps loitering/occupancy/zones alive)
+  track_lost_seconds: 2.0
+  detect_width: 640          # HOG only
   win_stride: [8, 8]
   scale: 1.05
-  detect_width: 640          # resize full-res to this width for HOG (speed)
-face_recognition:
+  night:
+    dark_brightness: 50      # lores mean brightness below this = night
+    enhance: true            # CLAHE contrast boost before detection at night
+    confidence_scale: 0.75   # lower the confidence threshold at night
+
+pose:                        # optional MoveNet (./install.sh --pose); improves fall + fight
   enabled: false
-  known_faces_dir: known_faces
-  unknown_faces_dir: unknown_faces   # new unrecognized face crops are saved here for labeling
-  tolerance: 0.6
-telegram:
-  enabled: true
-  bot_token: ""              # or env TELEGRAM_BOT_TOKEN
-  chat_id: ""                # or env TELEGRAM_CHAT_ID
-output:
-  save_dir: captures
+  model: models/movenet_lightning.tflite
+  max_people: 3
+  threads: 2
+
+events:
+  events_dir: events         # events/YYYY-MM-DD.csv — unified log of every module
+  snapshot_dir: captures
   jpeg_quality: 90
-attendance:
-  enabled: false             # needs face_recognition.enabled: true
-  dir: attendance            # attendance/YYYY-MM-DD.csv
-  relog_gap_minutes: 30      # seen again within gap -> update OUT time; after gap -> new IN row
-direction:
-  enabled: false
-  orientation: vertical      # vertical line (left/right) or horizontal (top/bottom)
-  position: 0.5              # line position as fraction of width/height
-  in_direction: left_to_right  # left_to_right | right_to_left | top_to_bottom | bottom_to_top
-  min_blob_area: 300         # lores px
-  max_jump_px: 80            # bigger centroid jump = new track
-  events_file: events.csv
-  alert_window_seconds: 10   # crossing this recent is included in Telegram caption
+  default_cooldown_seconds: 30
+  telegram:
+    enabled: true
+    bot_token: ""            # or env TELEGRAM_BOT_TOKEN
+    chat_id: ""              # or env TELEGRAM_CHAT_ID
+
+summary:                     # daily summary JSON in summaries/ + Telegram text at send_time
+  enabled: true
+  send_time: "21:00"
+
+# Every module accepts: enabled, telegram (true/false), cooldown_seconds, active_hours
+modules:
+  motion_alert:              # classic: motion (+ person) -> photo alert
+    enabled: true
+    require_person: true
+    cooldown_seconds: 30
+
+  attendance:                # 1. face recognition attendance (./install.sh --face)
+    enabled: false
+    known_faces_dir: known_faces      # alice.jpg, alice_2.jpg, bob_1.jpg ...
+    unknown_faces_dir: unknown_faces  # new unknown face crops land here for labeling
+    tolerance: 0.6
+    dir: attendance                   # attendance/YYYY-MM-DD.csv
+    relog_gap_minutes: 30
+    min_interval_seconds: 1.0
+    cooldown_seconds: 10
+
+  counter:                   # 2. people in/out counter (multi-person tracking)
+    enabled: false
+    line: [[0.5, 0.0], [0.5, 1.0]]    # vertical line in the middle
+    in_side: negative                 # for the default line, negative = moving left->right is IN; flip if reversed
+    classes: [person]
+    telegram: false
+
+  zone_intrusion:            # 3. restricted area
+    enabled: false
+    zones:
+      - name: restricted
+        points: [[0.6, 0.5], [0.95, 0.5], [0.95, 0.95], [0.6, 0.95]]
+    classes: [person]
+    active_hours: ""
+    cooldown_seconds: 20
+
+  fall:                      # 4. fall detection (pose if enabled, else box aspect ratio + centroid drop)
+    enabled: false
+    down_seconds: 5
+    drop_fraction: 0.25
+    cooldown_seconds: 30
+
+  fight:                     # 5. EXPERIMENTAL fight/violence heuristic
+    enabled: false
+    hold_seconds: 3
+    energy_threshold: 0.15   # pose: body-heights/second; no pose: motion fraction in the pair's box
+    proximity: 1.0
+    cooldown_seconds: 60
+
+  perimeter:                 # 6. farm / perimeter intruder (animals need detector.type: mobilenet_ssd)
+    enabled: false
+    classes: [person, cow, dog, horse, sheep, cat, bird]
+    line: [[0.0, 0.7], [1.0, 0.7]]    # tripwire (set to null to use zones only)
+    direction: both                   # both | positive | negative
+    zones: []
+    active_hours: ""
+    cooldown_seconds: 30
+
+  loitering:                 # 7. person stays in a zone (or anywhere if no zones) too long
+    enabled: false
+    max_seconds: 60
+    zones: []
+
+  occupancy:                 # 8. crowd / occupancy limit
+    enabled: false
+    max_people: 5
+    hold_seconds: 5
+    zones: []
+
+  animal:                    # animal detection (mobilenet_ssd: bird, cat, cow, dog, horse, sheep)
+    enabled: false
+    classes: [bird, cat, cow, dog, horse, sheep]
+
+  tamper:                    # 9. camera covered / blurred / moved
+    enabled: false
+    dark_threshold: 15
+    flat_std: 8
+    blur_threshold: 15
+    scene_change: 0.5
+    hold_seconds: 3
+    cooldown_seconds: 120
+
+  fire_smoke:                # 10. EXPERIMENTAL fire/smoke color+flicker heuristic (not a smoke alarm!)
+    enabled: false
+    min_fire_fraction: 0.005
+    flicker_threshold: 0.3
+    min_smoke_fraction: 0.15
+    hold_seconds: 4
+    cooldown_seconds: 120
+
+  after_hours:               # 11. any person/vehicle during the night window
+    enabled: false
+    active_hours: "20:00-06:00"
+    classes: [person, car, bus, motorbike, bicycle]
+    cooldown_seconds: 60

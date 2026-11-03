@@ -1,27 +1,36 @@
 #!/usr/bin/env python3
-"""Pi 5 motion camera: motion -> person detection -> (face recognition) -> Telegram photo alert."""
+"""Pi Motion Cam — modular smart camera for Raspberry Pi 5.
+
+lores stream -> motion + cheap scene modules (tamper) every frame
+detection tick -> detector (HOG / MobileNet-SSD) -> tracker -> optional pose -> modules -> event bus (CSV, snapshot, Telegram)
+"""
+import argparse
 import logging
 import os
-import sys
 import time
-from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
-import requests
 import yaml
 
-from attendance import Attendance, LineCounter
+from modules import load_modules
+from modules.base import Frame, Module, put_label
+from modules.detectors import make_detector, night_enhance
+from modules.events import DailySummary, EventBus
+from modules.pose import make_pose
+from modules.tracker import Tracker
 
 BASE = Path(__file__).resolve().parent
 log = logging.getLogger("motioncam")
+COLORS = {"person": (0, 255, 0)}
 
 
 def load_config(path=BASE / "config.yaml"):
     with open(path) as f:
         cfg = yaml.safe_load(f) or {}
-    tg = cfg.setdefault("telegram", {})
+    tg = cfg.setdefault("events", {}).setdefault("telegram", {})
     tg["bot_token"] = os.environ.get("TELEGRAM_BOT_TOKEN") or tg.get("bot_token", "")
     tg["chat_id"] = os.environ.get("TELEGRAM_CHAT_ID") or tg.get("chat_id", "")
     return cfg
@@ -48,116 +57,37 @@ class MotionDetector:
         return changed >= self.min_area, changed, mask
 
 
-class PersonDetector:
-    def __init__(self, c):
-        self.hog = cv2.HOGDescriptor()
-        self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-        self.stride = tuple(c.get("win_stride", [8, 8]))
-        self.scale = c.get("scale", 1.05)
-        self.width = c.get("detect_width", 640)
-
-    def detect(self, bgr):
-        h, w = bgr.shape[:2]
-        r = self.width / float(w) if w > self.width else 1.0
-        small = cv2.resize(bgr, (int(w * r), int(h * r))) if r != 1.0 else bgr
-        rects, _ = self.hog.detectMultiScale(small, winStride=self.stride, padding=(8, 8), scale=self.scale)
-        return [(int(x / r), int(y / r), int(bw / r), int(bh / r)) for (x, y, bw, bh) in rects]
-
-
-class FaceRecognizer:
-    def __init__(self, c):
-        import face_recognition  # optional dependency
-        self.fr = face_recognition
-        self.tol = c.get("tolerance", 0.6)
-        self.dir = BASE / c.get("known_faces_dir", "known_faces")
-        self.unknown_dir = BASE / c.get("unknown_faces_dir", "unknown_faces")
-        self.unknown_dir.mkdir(parents=True, exist_ok=True)
-        self.unknown_encs = []  # recent unknown encodings, to avoid saving the same stranger repeatedly
-        self._sig = None
-        self.reload_if_changed(force=True)
-
-    def _signature(self):
-        return tuple(sorted((p.name, p.stat().st_mtime) for p in self.dir.glob("*")
-                            if p.suffix.lower() in (".jpg", ".jpeg", ".png")))
-
-    def reload_if_changed(self, force=False):
-        self.dir.mkdir(parents=True, exist_ok=True)
-        sig = self._signature()
-        if not force and sig == self._sig:
-            return
-        self._sig = sig
-        names, encs = [], []
-        for name, _ in sig:
-            p = self.dir / name
-            e = self.fr.face_encodings(self.fr.load_image_file(str(p)))
-            if e:
-                names.append(re.sub(r"[_-]\d+$", "", p.stem))  # alice.jpg / alice_2.jpg -> alice
-                encs.append(e[0])
-            else:
-                log.warning("No face found in %s", p)
-        self.names, self.encs = names, encs
-        self.unknown_encs = [u for u in self.unknown_encs
-                             if not encs or min(self.fr.face_distance(encs, u)) > self.tol]
-        log.info("Loaded %d known face photos (%d people)", len(names), len(set(names)))
-
-    def recognize(self, bgr):
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        locs = self.fr.face_locations(rgb)
-        out = []
-        for loc, enc in zip(locs, self.fr.face_encodings(rgb, locs)):
-            name = "Unknown"
-            if self.encs:
-                dist = self.fr.face_distance(self.encs, enc)
-                i = int(np.argmin(dist))
-                if dist[i] <= self.tol:
-                    name = self.names[i]
-            out.append((loc, name, enc))
-        return out
-
-    def save_unknown(self, bgr, loc, enc, ts):
-        """Save a crop of a new unknown face to unknown_faces/. Returns path, or None if seen recently."""
-        if self.unknown_encs and min(self.fr.face_distance(self.unknown_encs, enc)) <= self.tol:
-            return None
-        self.unknown_encs = (self.unknown_encs + [enc])[-50:]
-        top, right, bottom, left = loc
-        pad = int((bottom - top) * 0.3)
-        h, w = bgr.shape[:2]
-        crop = bgr[max(0, top - pad):min(h, bottom + pad), max(0, left - pad):min(w, right + pad)]
-        path = self.unknown_dir / f"unknown_{ts:%Y%m%d_%H%M%S}_{len(self.unknown_encs)}.jpg"
-        cv2.imwrite(str(path), crop)
-        log.info("New unknown face saved: %s (rename to name.jpg and move to known_faces/)", path)
-        return path
-
-
-def send_telegram(cfg, path, caption):
-    token, chat = cfg.get("bot_token"), cfg.get("chat_id")
-    if not cfg.get("enabled", True) or not token or not chat:
-        log.warning("Telegram disabled or not configured; skipping alert")
-        return
-    try:
-        with open(path, "rb") as f:
-            r = requests.post(f"https://api.telegram.org/bot{token}/sendPhoto",
-                              data={"chat_id": chat, "caption": caption[:1024]},
-                              files={"photo": f}, timeout=30)
-        if r.ok:
-            log.info("Telegram alert sent")
-        else:
-            log.error("Telegram error %s: %s", r.status_code, r.text[:200])
-    except requests.RequestException as e:
-        log.error("Telegram send failed: %s", e)
+def annotate(img, dets, modules):
+    for d in dets:
+        x, y, w, h = d.box
+        c = COLORS.get(d.cls, (0, 200, 255))
+        cv2.rectangle(img, (x, y), (x + w, y + h), c, 3)
+        put_label(img, f"{d.cls} #{d.track_id} {d.conf:.2f}", (x, max(30, y - 10)), c, 0.7)
+    for m in modules:
+        m.draw(img)
+    put_label(img, time.strftime("%Y-%m-%d %H:%M:%S"), (20, img.shape[0] - 20), (255, 255, 255), 0.9)
+    return img
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--summary", action="store_true", help="print today's summary JSON and exit")
+    args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = load_config()
+    cam_c, mot_c, det_c = cfg.get("camera", {}), cfg.get("motion", {}), cfg.get("detector", {})
+    ctx = SimpleNamespace(base=BASE, min_motion_area=mot_c.get("min_area", 800))
+    modules = load_modules(cfg.get("modules", {}), ctx)
+    bus = EventBus(cfg.get("events", {}), BASE, cfg.get("modules", {}) or {})
+    summary = DailySummary(cfg.get("summary", {}), BASE, bus)
+    if args.summary:
+        import json
+        print(json.dumps(summary.build(modules), indent=2))
+        return
+    if not modules:
+        log.warning("No modules enabled in config.yaml (modules: ...). Only motion will be computed.")
+
     from picamera2 import Picamera2
-
-    cam_c, mot_c = cfg.get("camera", {}), cfg.get("motion", {})
-    pd_c, fr_c = cfg.get("person_detection", {}), cfg.get("face_recognition", {})
-    out_c = cfg.get("output", {})
-    save_dir = BASE / out_c.get("save_dir", "captures")
-    save_dir.mkdir(parents=True, exist_ok=True)
-
     picam = Picamera2()
     conf = picam.create_video_configuration(
         main={"size": tuple(cam_c.get("main_size", [2304, 1296])), "format": "RGB888"},
@@ -169,80 +99,62 @@ def main():
     lw, lh = conf["lores"]["size"]
 
     motion = MotionDetector(mot_c)
-    person = PersonDetector(pd_c) if pd_c.get("enabled", True) else None
-    faces = None
-    if fr_c.get("enabled", False):
-        try:
-            faces = FaceRecognizer(fr_c)
-        except ImportError:
-            log.error("face_recognition not installed; face recognition disabled")
-    att_c, dir_c = cfg.get("attendance", {}), cfg.get("direction", {})
-    attendance = Attendance(att_c, BASE) if att_c.get("enabled", False) else None
-    if attendance and not faces:
-        log.warning("Attendance needs face_recognition enabled; it will log nothing")
-    counter = LineCounter(dir_c, BASE, (lw, lh)) if dir_c.get("enabled", False) else None
-    cooldown = mot_c.get("cooldown_seconds", 30)
-    last_alert = 0.0
-    log.info("Watching for motion...")
+    det_modules = [m for m in modules if type(m).process is not Module.process]  # modules that need full frames
+    detector = make_detector(det_c, BASE) if any(m.needs_detection for m in det_modules) else None
+    pose = make_pose(cfg.get("pose", {}), BASE) if any(m.needs_pose for m in modules) else None
+    tracker = Tracker(det_c.get("track_lost_seconds", 2.0))
+    active_iv, idle_iv = det_c.get("interval_seconds", 0.3), det_c.get("idle_interval_seconds", 2.0)
+    conf_thr, night_c = det_c.get("confidence", 0.4), det_c.get("night", {})
+    last_det, was_active = 0.0, False
+    log.info("Running with %d module(s); detector=%s pose=%s", len(modules),
+             type(detector).__name__ if detector else None, bool(pose))
 
     try:
         while True:
             yuv = picam.capture_array("lores")
-            gray = yuv[:lh, :lw]  # Y plane
+            gray = yuv[:lh, :lw]
+            ts = time.time()
             moved, area, mask = motion.update(gray)
-            if counter and mask is not None:
-                d = counter.update(mask)
-                if d:
-                    log.info("Line crossing: %s (IN=%d OUT=%d)", d, counter.count["IN"], counter.count["OUT"])
-            if not moved or time.time() - last_alert < cooldown:
+            lores_events = []
+            for m in modules:
+                lores_events += m.on_lores(gray, mask, area, ts)
+            summary.tick(modules)
+            interval = active_iv if (moved or was_active) else idle_iv
+            if ts - last_det < interval:
+                if lores_events:
+                    frame = np.ascontiguousarray(picam.capture_array("main"))
+                    bus.emit(lores_events, annotate(frame, [], modules))
                 continue
-            log.info("Motion detected (%d px)", area)
-            frame = picam.capture_array("main")  # RGB888 is BGR-ordered in memory -> OpenCV ready
-            frame = np.ascontiguousarray(frame)
-            people = person.detect(frame) if person else []
-            if person and pd_c.get("require_person", True) and not people:
-                log.info("No person found; ignoring")
-                continue
-            for (x, y, w, h) in people:
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
-                cv2.putText(frame, "Person", (x, max(30, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-            names, new_unknown = [], []
-            ts = datetime.now()
-            if faces:
-                faces.reload_if_changed()  # picks up photos added/renamed in known_faces/
-                for loc, name, enc in faces.recognize(frame):
-                    if name == "Unknown":
-                        up = faces.save_unknown(frame, loc, enc, ts)
-                        if up:
-                            new_unknown.append(up)
-                    top, right, bottom, left = loc
-                    names.append(name)
-                    color = (0, 0, 255) if name == "Unknown" else (255, 128, 0)
-                    cv2.rectangle(frame, (left, top), (right, bottom), color, 3)
-                    cv2.putText(frame, name, (left, max(30, top - 10)), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
-            if counter:
-                counter.draw(frame)
-            path = save_dir / f"motion_{ts:%Y%m%d_%H%M%S}.jpg"
-            cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, out_c.get("jpeg_quality", 90)])
-            log.info("Saved %s", path)
-            caption = f"Motion at {ts:%Y-%m-%d %H:%M:%S}\nPeople: {len(people)}"
-            if names:
-                caption += "\nFaces: " + ", ".join(names)
-            if new_unknown:
-                caption += f"\nUnknown person — please label in admin panel ({len(new_unknown)} new in unknown_faces/)"
-            if counter:
-                d = counter.recent(dir_c.get("alert_window_seconds", 10))
-                caption += f"\nDirection: {d or 'n/a'} (IN {counter.count['IN']} / OUT {counter.count['OUT']})"
-            if attendance:
-                attendance.seen(names, path)
-            send_telegram(cfg.get("telegram", {}), path, caption)
-            last_alert = time.time()
-            motion.prev = None  # reset background after capture
+            last_det = ts
+            frame = np.ascontiguousarray(picam.capture_array("main"))  # RGB888 is BGR-ordered -> OpenCV-ready
+            dark = float(gray.mean()) < night_c.get("dark_brightness", 50)
+            det_img = night_enhance(frame) if (dark and night_c.get("enhance", True)) else frame
+            thr = conf_thr * night_c.get("confidence_scale", 0.75) if dark else conf_thr
+            dets = detector.detect(det_img, thr) if detector else []
+            tracks = tracker.update(dets, ts, frame.shape[1])
+            was_active = bool(dets)
+            if pose:
+                for t in sorted((t for t in tracks.values() if t.cls == "person"), key=lambda t: -t.box[2] * t.box[3])[:pose.max_people]:
+                    t.pose = pose.estimate(frame, t.box)
+                    if t.pose:
+                        t.pose_hist.append((ts, t.pose))
+            f = Frame(ts, frame, gray, mask, area if moved else 0, dets, tracks, (lw, lh))
+            events = list(lores_events)
+            for m in det_modules:
+                try:
+                    events += m.process(f)
+                except Exception:
+                    log.exception("Module %s crashed on a frame", m.name)
+            if events:
+                bus.emit(events, annotate(frame.copy(), dets, modules))
+            if moved and events:
+                motion.prev = None
     except KeyboardInterrupt:
         log.info("Stopping")
     finally:
+        summary.write(modules)
         picam.stop()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

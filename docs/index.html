@@ -1,78 +1,81 @@
 <!doctype html>
 <html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pi Motion Cam – Web</title>
-<link rel="stylesheet" href="style.css?v=4">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1419">
+<title>Pi Motion Cam – Smart camera (web)</title>
 <link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css?v=5">
 </head><body>
-<header><h1>📷 Pi Motion Cam <small>web v4</small></h1><button id="unkBadge" class="badge" hidden>⚠️ <b id="unkCount">0</b> unknown</button><span id="status">Idle</span></header>
+<header>
+  <h1>📷 Pi Motion Cam <small>web <span id="ver">v5</span></small></h1>
+  <button id="unkBadge" class="badge" hidden>⚠️ <b id="unkCount">0</b> unknown</button>
+  <span id="status">Idle</span>
+</header>
+<div id="toasts"></div>
 <main>
-<section class="card">
-  <div class="stage"><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
-  <div class="row">
-    <button id="startBtn" class="primary">Start camera</button>
-    <button id="stopBtn" disabled>Stop</button>
-    <button id="snapBtn" disabled>Snapshot</button>
+<section class="card stagecard">
+  <div class="stage" id="stage"><video id="video" playsinline muted></video><canvas id="overlay"></canvas>
+    <div class="editbar" id="editBar" hidden><span id="editMsg"></span><button id="editUndo">Undo</button><button id="editDone" class="primary">Done</button><button id="editCancel">Cancel</button></div>
   </div>
-  <div class="stats"><span>Motion: <b id="motionVal">0</b>%</span><span>People: <b id="peopleVal">0</b></span>
-    <span>IN: <b id="inVal">0</b></span><span>OUT: <b id="outVal">0</b></span></div>
-</section>
-
-<section class="card">
-  <h2>Settings</h2>
-  <label>Motion threshold (% pixels changed): <b id="motionThrLbl"></b><input type="range" id="motionThr" min="0.2" max="20" step="0.1" value="2"></label>
-  <label>Pixel sensitivity (diff level): <b id="pixThrLbl"></b><input type="range" id="pixThr" min="5" max="100" value="30"></label>
-  <label>Person confidence: <b id="confLbl"></b><input type="range" id="conf" min="0.2" max="0.95" step="0.05" value="0.55"></label>
-  <label>Snapshot cooldown (s): <b id="coolLbl"></b><input type="range" id="cool" min="2" max="120" value="10"></label>
-  <label class="chk"><input type="checkbox" id="personOnly" checked> Only capture when a person is detected</label>
-  <h3>Virtual line</h3>
-  <label class="chk"><input type="checkbox" id="lineOn" checked> Enable in/out counting</label>
-  <label>Orientation <select id="lineOri"><option value="v">Vertical</option><option value="h">Horizontal</option></select></label>
-  <label>Position: <b id="linePosLbl"></b><input type="range" id="linePos" min="0.05" max="0.95" step="0.01" value="0.5"></label>
-  <label>IN direction <select id="inDir"><option value="pos">Left→Right / Top→Bottom</option><option value="neg">Right→Left / Bottom→Top</option></select></label>
-  <button id="resetCounts">Reset counts</button>
-</section>
-
-<section class="card wide unkcard" id="unkCard" hidden>
-  <h2>⚠️ Unknown faces — needs label</h2>
-  <p class="hint">Unrecognized faces are queued here (max 20, duplicates merged). Save enrolls the face under that name and updates their attendance rows.</p>
-  <datalist id="knownNames"></datalist>
-  <div id="unkList"></div>
-</section>
-
-<section class="card">
-  <h2>Faces &amp; attendance</h2>
-  <label class="chk"><input type="checkbox" id="faceOn"> Enable face recognition (loads ~7 MB models)</label>
-  <div id="faceErr" class="err" hidden></div><button id="faceRetry" hidden>Retry loading face models</button>
-  <div class="row"><input id="enrollName" placeholder="Name"><button id="enrollBtn" disabled>Enroll face from camera</button></div>
-  <div class="bulk">
-    <label>Bulk enroll from photos (up to 10). Uses the Name above, or the filename prefix if Name is blank (e.g. <code>alice_1.jpg</code> → alice).
-      <input type="file" id="bulkFiles" accept="image/*" multiple></label>
-    <div id="bulkResults"></div>
+  <div class="row ctrl">
+    <button id="startBtn" class="primary">▶ Start camera</button><button id="stopBtn" hidden>■ Stop</button>
+    <button id="flipBtn" title="Switch front/back camera">🔄 Flip</button><button id="snapBtn">📸 Snapshot</button>
   </div>
-  <h3>Enrolled people</h3>
-  <div id="faceList"></div>
-  <label>Re-log gap (minutes): <input type="number" id="gap" value="30" min="1" style="width:5em"></label>
-  <table><thead><tr><th>Name</th><th>IN</th><th>OUT</th></tr></thead><tbody id="attBody"></tbody></table>
-  <div class="row"><button id="csvBtn">Export CSV</button><button id="clearAtt">Clear</button></div>
+  <div class="hint" id="liveStats">Camera off</div>
 </section>
 
-<section class="card">
-  <h2>Telegram alerts (optional)</h2>
-  <p class="hint">Stored only in this browser (localStorage). Sent directly from your browser to api.telegram.org.</p>
-  <input id="tgToken" placeholder="Bot token"><input id="tgChat" placeholder="Chat ID">
-  <label class="chk"><input type="checkbox" id="tgOn"> Send snapshots to Telegram</label>
-  <button id="tgTest">Send test message</button>
+<nav class="tabs">
+  <button data-tab="tabModules" class="on">🧩 Modules</button><button data-tab="tabEvents">📜 Events <span id="evCount" class="cnt">0</span></button>
+  <button data-tab="tabSummary">📊 Summary</button><button data-tab="tabSettings">⚙️ Settings</button>
+</nav>
+
+<section class="tab" id="tabModules">
+  <p class="hint">Turn modules on with the switch; tap a module to open its settings. Draw lines/zones by tapping on the video.</p>
+  <div id="modList"></div>
+  <p class="hint">PPE (helmet/vest) detection is not included: no small, openly licensed browser model is readily available.</p>
 </section>
 
-<section class="card wide">
-  <h2>Snapshots <button id="clearSnaps" class="small">Clear</button></h2>
-  <div id="gallery"></div>
+<section class="tab card" id="tabEvents" hidden>
+  <div class="row"><select id="evFilter"></select><button id="evCsv">Export CSV</button><button id="evClear">Clear</button></div>
+  <div id="evList"></div>
+</section>
+
+<section class="tab card" id="tabSummary" hidden>
+  <h2>Today</h2><div id="sumBody"></div>
+  <div class="row"><button id="sumJson">Export JSON</button><button id="sumCsv">Export CSV</button><button id="sumTg">Send to Telegram</button></div>
+  <label class="chk"><input type="checkbox" id="sumAuto"> Auto-send daily summary to Telegram at <input type="time" id="sumTime" class="inl"> (while this page is open)</label>
+</section>
+
+<section class="tab card" id="tabSettings" hidden>
+  <h2>Detection</h2><div id="gFields"></div>
+  <label>Night mode <select id="gNight"><option value="auto">Auto (when dark)</option><option value="on">Always on</option><option value="off">Off</option></select></label>
+  <p class="hint">Night mode brightens frames before detection and lowers the confidence threshold — useful for farm/perimeter watching at dusk.</p>
+  <label class="chk"><input type="checkbox" id="gSound"> Beep + vibrate on alerts</label>
+  <h2>Telegram</h2>
+  <p class="hint">Stored only in this browser. Each module has its own Telegram switch and cooldown.</p>
+  <input id="tgToken" placeholder="Bot token"><input id="tgChat" placeholder="Chat ID"><button id="tgTest">Send test message</button>
+  <h2>Configuration</h2>
+  <div class="row"><button id="cfgExport">Export web config</button><label class="btn">Import<input type="file" id="cfgImport" accept=".json" hidden></label><button id="cfgPi">Export Pi config (YAML)</button><button id="cfgReset">Reset</button></div>
+  <p class="hint">"Export Pi config" turns your web settings, lines and zones into the <code>modules:</code> section of the Raspberry Pi <code>config.yaml</code>.</p>
 </section>
 </main>
 <footer>All processing happens locally in your browser. <a href="https://github.com/vibhvesh/pi-motion-cam">Raspberry Pi version on GitHub</a></footer>
-<script src="vendor/tf.min.js?v=4"></script>
-<script src="vendor/tf-backend-wasm.min.js?v=4"></script>
-<script src="vendor/coco-ssd.min.js?v=4"></script>
-<script src="app.js?v=4"></script>
+<script src="vendor/tf.min.js?v=5"></script>
+<script src="vendor/tf-backend-wasm.min.js?v=5"></script>
+<script src="vendor/coco-ssd.min.js?v=5"></script>
+<script src="vendor/pose-detection.min.js?v=5"></script>
+<script src="js/core.js?v=5"></script>
+<script src="js/modules/attendance.js?v=5"></script>
+<script src="js/modules/counter.js?v=5"></script>
+<script src="js/modules/zone.js?v=5"></script>
+<script src="js/modules/fall.js?v=5"></script>
+<script src="js/modules/fight.js?v=5"></script>
+<script src="js/modules/perimeter.js?v=5"></script>
+<script src="js/modules/loiter.js?v=5"></script>
+<script src="js/modules/occupancy.js?v=5"></script>
+<script src="js/modules/animal.js?v=5"></script>
+<script src="js/modules/afterhours.js?v=5"></script>
+<script src="js/modules/scene.js?v=5"></script>
+<script src="js/modules/motion.js?v=5"></script>
+<script src="js/ui.js?v=5"></script>
 </body></html>
