@@ -16,3 +16,11 @@ table{width:100%;border-collapse:collapse;font-size:.8rem;margin-top:8px}td,th{b
 .face button{padding:0 4px;background:none}footer{text-align:center;font-size:.75rem;color:#777;padding:16px}a{color:#7aa2f7}
 .err{background:#3b1d24;color:#f7768e;border-radius:6px;padding:8px;font-size:.8rem;margin:6px 0;word-break:break-word}
 #status{max-width:65%;text-align:right;word-break:break-word}
+.bulk{margin:10px 0;padding:8px;border:1px dashed #2a3442;border-radius:8px}.bulk input[type=file]{display:block;margin-top:6px;width:100%}
+.bres{display:flex;gap:8px;align-items:center;font-size:.78rem;margin:4px 0}.bres img{width:44px;height:44px;object-fit:cover;border-radius:4px}
+.bres.ok span{color:#9ece6a}.bres.bad span{color:#f7768e}
+.person{display:flex;gap:8px;align-items:center;background:#2a3442;border-radius:8px;padding:4px 8px;margin:4px 0;font-size:.85rem}
+.person img{width:36px;height:36px;border-radius:50%;object-fit:cover}.person span{flex:1}code{font-size:.8em}
+.badge{background:#e0af68;color:#1a1b26;font-weight:600;padding:5px 10px;border-radius:14px;margin-left:auto;margin-right:8px}
+.unkcard{border:2px solid #e0af68}#unkList{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
+.unk{display:flex;gap:8px;background:#0f1419;border-radius:8px;padding:8px}.unk img{width:72px;height:72px;border-radius:8px;object-fit:cover}.unkinfo{flex:1;min-width:0}

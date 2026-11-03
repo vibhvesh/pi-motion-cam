@@ -7,3 +7,4 @@ attendance/
 events.csv
 *.local.service
 __pycache__/
+unknown_faces/

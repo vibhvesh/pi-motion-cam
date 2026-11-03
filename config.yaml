@@ -17,6 +17,7 @@ person_detection:
 face_recognition:
   enabled: false
   known_faces_dir: known_faces
+  unknown_faces_dir: unknown_faces   # new unrecognized face crops are saved here for labeling
   tolerance: 0.6
 telegram:
   enabled: true

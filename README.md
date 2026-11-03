@@ -33,7 +33,13 @@ The venv uses `--system-site-packages` so apt's picamera2/OpenCV are visible.
 
 ## 4. Face recognition (optional)
 Put one clear photo per person in `known_faces/` named by person: `alice.jpg`, `bob.png`
-(`alice_2.jpg` also counts as alice). Set `face_recognition.enabled: true`. Unmatched faces → `Unknown`.
+Multiple photos per person are supported and improve accuracy: `alice_1.jpg`, `alice_2.jpg`, `alice_3.jpg` all count as alice (each photo adds a face encoding; matching uses the closest one). Use 3–5 clear photos with different angles/lighting. Set `face_recognition.enabled: true`. Unmatched faces → `Unknown`.
+
+**Labeling unknown people:** each new unrecognized face is cropped and saved to `unknown_faces/unknown_YYYYMMDD_HHMMSS_N.jpg`
+(the same stranger isn't saved again while the program runs), and the Telegram caption says *"Unknown person — please label in admin panel"*.
+To label one, rename the file to the person's name and move it into `known_faces/`, e.g.
+`mv unknown_faces/unknown_20261103_191502_1.jpg known_faces/alice_3.jpg`.
+`known_faces/` is re-scanned automatically on the next motion event — no restart needed.
 
 ## 5. Attendance (optional)
 Set `attendance.enabled: true` (requires face recognition). Each recognized person is written to

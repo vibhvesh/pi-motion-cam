@@ -12,7 +12,7 @@ python3 -m venv --system-site-packages venv
 if [ "$1" = "--face" ]; then
   ./venv/bin/pip install face_recognition   # builds dlib, can take 30+ min
 fi
-mkdir -p captures known_faces
+mkdir -p captures known_faces unknown_faces
 sed -e "s|__USER__|$USER|g" -e "s|__DIR__|$PWD|g" pi-motion-cam.service > pi-motion-cam.local.service
 echo "Service file generated: $PWD/pi-motion-cam.local.service"
 echo "  Enable autostart: sudo cp pi-motion-cam.local.service /etc/systemd/system/pi-motion-cam.service && sudo systemctl daemon-reload && sudo systemctl enable --now pi-motion-cam"

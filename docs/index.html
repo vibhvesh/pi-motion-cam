@@ -2,10 +2,10 @@
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pi Motion Cam – Web</title>
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 <link rel="icon" href="data:,">
 </head><body>
-<header><h1>📷 Pi Motion Cam <small>web v3</small></h1><span id="status">Idle</span></header>
+<header><h1>📷 Pi Motion Cam <small>web v4</small></h1><button id="unkBadge" class="badge" hidden>⚠️ <b id="unkCount">0</b> unknown</button><span id="status">Idle</span></header>
 <main>
 <section class="card">
   <div class="stage"><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
@@ -33,11 +33,24 @@
   <button id="resetCounts">Reset counts</button>
 </section>
 
+<section class="card wide unkcard" id="unkCard" hidden>
+  <h2>⚠️ Unknown faces — needs label</h2>
+  <p class="hint">Unrecognized faces are queued here (max 20, duplicates merged). Save enrolls the face under that name and updates their attendance rows.</p>
+  <datalist id="knownNames"></datalist>
+  <div id="unkList"></div>
+</section>
+
 <section class="card">
   <h2>Faces &amp; attendance</h2>
   <label class="chk"><input type="checkbox" id="faceOn"> Enable face recognition (loads ~7 MB models)</label>
   <div id="faceErr" class="err" hidden></div><button id="faceRetry" hidden>Retry loading face models</button>
   <div class="row"><input id="enrollName" placeholder="Name"><button id="enrollBtn" disabled>Enroll face from camera</button></div>
+  <div class="bulk">
+    <label>Bulk enroll from photos (up to 10). Uses the Name above, or the filename prefix if Name is blank (e.g. <code>alice_1.jpg</code> → alice).
+      <input type="file" id="bulkFiles" accept="image/*" multiple></label>
+    <div id="bulkResults"></div>
+  </div>
+  <h3>Enrolled people</h3>
   <div id="faceList"></div>
   <label>Re-log gap (minutes): <input type="number" id="gap" value="30" min="1" style="width:5em"></label>
   <table><thead><tr><th>Name</th><th>IN</th><th>OUT</th></tr></thead><tbody id="attBody"></tbody></table>
@@ -58,8 +71,8 @@
 </section>
 </main>
 <footer>All processing happens locally in your browser. <a href="https://github.com/vibhvesh/pi-motion-cam">Raspberry Pi version on GitHub</a></footer>
-<script src="vendor/tf.min.js?v=3"></script>
-<script src="vendor/tf-backend-wasm.min.js?v=3"></script>
-<script src="vendor/coco-ssd.min.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="vendor/tf.min.js?v=4"></script>
+<script src="vendor/tf-backend-wasm.min.js?v=4"></script>
+<script src="vendor/coco-ssd.min.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body></html>

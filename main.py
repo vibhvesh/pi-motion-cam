@@ -69,18 +69,36 @@ class FaceRecognizer:
         import face_recognition  # optional dependency
         self.fr = face_recognition
         self.tol = c.get("tolerance", 0.6)
-        self.names, self.encs = [], []
-        d = BASE / c.get("known_faces_dir", "known_faces")
-        for p in sorted(d.glob("*")):
-            if p.suffix.lower() not in (".jpg", ".jpeg", ".png"):
-                continue
-            encs = face_recognition.face_encodings(face_recognition.load_image_file(str(p)))
-            if encs:
-                self.names.append(p.stem.split("_")[0])  # alice.jpg / alice_2.jpg -> alice
-                self.encs.append(encs[0])
+        self.dir = BASE / c.get("known_faces_dir", "known_faces")
+        self.unknown_dir = BASE / c.get("unknown_faces_dir", "unknown_faces")
+        self.unknown_dir.mkdir(parents=True, exist_ok=True)
+        self.unknown_encs = []  # recent unknown encodings, to avoid saving the same stranger repeatedly
+        self._sig = None
+        self.reload_if_changed(force=True)
+
+    def _signature(self):
+        return tuple(sorted((p.name, p.stat().st_mtime) for p in self.dir.glob("*")
+                            if p.suffix.lower() in (".jpg", ".jpeg", ".png")))
+
+    def reload_if_changed(self, force=False):
+        self.dir.mkdir(parents=True, exist_ok=True)
+        sig = self._signature()
+        if not force and sig == self._sig:
+            return
+        self._sig = sig
+        names, encs = [], []
+        for name, _ in sig:
+            p = self.dir / name
+            e = self.fr.face_encodings(self.fr.load_image_file(str(p)))
+            if e:
+                names.append(re.sub(r"[_-]\d+$", "", p.stem))  # alice.jpg / alice_2.jpg -> alice
+                encs.append(e[0])
             else:
                 log.warning("No face found in %s", p)
-        log.info("Loaded %d known faces", len(self.names))
+        self.names, self.encs = names, encs
+        self.unknown_encs = [u for u in self.unknown_encs
+                             if not encs or min(self.fr.face_distance(encs, u)) > self.tol]
+        log.info("Loaded %d known face photos (%d people)", len(names), len(set(names)))
 
     def recognize(self, bgr):
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
@@ -93,8 +111,22 @@ class FaceRecognizer:
                 i = int(np.argmin(dist))
                 if dist[i] <= self.tol:
                     name = self.names[i]
-            out.append((loc, name))
+            out.append((loc, name, enc))
         return out
+
+    def save_unknown(self, bgr, loc, enc, ts):
+        """Save a crop of a new unknown face to unknown_faces/. Returns path, or None if seen recently."""
+        if self.unknown_encs and min(self.fr.face_distance(self.unknown_encs, enc)) <= self.tol:
+            return None
+        self.unknown_encs = (self.unknown_encs + [enc])[-50:]
+        top, right, bottom, left = loc
+        pad = int((bottom - top) * 0.3)
+        h, w = bgr.shape[:2]
+        crop = bgr[max(0, top - pad):min(h, bottom + pad), max(0, left - pad):min(w, right + pad)]
+        path = self.unknown_dir / f"unknown_{ts:%Y%m%d_%H%M%S}_{len(self.unknown_encs)}.jpg"
+        cv2.imwrite(str(path), crop)
+        log.info("New unknown face saved: %s (rename to name.jpg and move to known_faces/)", path)
+        return path
 
 
 def send_telegram(cfg, path, caption):
@@ -174,22 +206,30 @@ def main():
             for (x, y, w, h) in people:
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
                 cv2.putText(frame, "Person", (x, max(30, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-            names = []
+            names, new_unknown = [], []
+            ts = datetime.now()
             if faces:
-                for (top, right, bottom, left), name in faces.recognize(frame):
+                faces.reload_if_changed()  # picks up photos added/renamed in known_faces/
+                for loc, name, enc in faces.recognize(frame):
+                    if name == "Unknown":
+                        up = faces.save_unknown(frame, loc, enc, ts)
+                        if up:
+                            new_unknown.append(up)
+                    top, right, bottom, left = loc
                     names.append(name)
                     color = (0, 0, 255) if name == "Unknown" else (255, 128, 0)
                     cv2.rectangle(frame, (left, top), (right, bottom), color, 3)
                     cv2.putText(frame, name, (left, max(30, top - 10)), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
             if counter:
                 counter.draw(frame)
-            ts = datetime.now()
             path = save_dir / f"motion_{ts:%Y%m%d_%H%M%S}.jpg"
             cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, out_c.get("jpeg_quality", 90)])
             log.info("Saved %s", path)
             caption = f"Motion at {ts:%Y-%m-%d %H:%M:%S}\nPeople: {len(people)}"
             if names:
                 caption += "\nFaces: " + ", ".join(names)
+            if new_unknown:
+                caption += f"\nUnknown person — please label in admin panel ({len(new_unknown)} new in unknown_faces/)"
             if counter:
                 d = counter.recent(dir_c.get("alert_window_seconds", 10))
                 caption += f"\nDirection: {d or 'n/a'} (IN {counter.count['IN']} / OUT {counter.count['OUT']})"

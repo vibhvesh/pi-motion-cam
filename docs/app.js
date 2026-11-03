@@ -4,10 +4,11 @@ const video = $('video'), overlay = $('overlay'), octx = overlay.getContext('2d'
 const small = document.createElement('canvas'); small.width = 160; small.height = 120;
 const sctx = small.getContext('2d', { willReadFrequently: true });
 const LS = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => localStorage.setItem(k, JSON.stringify(v)) };
-const APP_VERSION = '3';
+const APP_VERSION = '4';
+const MODEL_VERSION = '3'; // model files unchanged since v3
 const FACE_JS = 'vendor/face-api.esm-nobundle.js?v=' + APP_VERSION; // @vladmandic/face-api 1.7.13 no-bundle build, patched to use the page's global tf (single tfjs)
-const FACE_MODELS = 'models/face-v' + APP_VERSION + '/';          // versioned dir = cache-bust
-const COCO_MODEL = 'models/coco-v' + APP_VERSION + '/model.json';
+const FACE_MODELS = 'models/face-v' + MODEL_VERSION + '/';          // versioned dir = cache-bust
+const COCO_MODEL = 'models/coco-v' + MODEL_VERSION + '/model.json';
 
 let stream = null, running = false, cocoModel = null, faceReady = false, FA = null, faceLoading = null; // NB: don't name this 'faceapi' (collides with the library's global)
 let prevGray = null, lastSnap = 0, lastDet = [], lastFaces = [], busy = false, frameNo = 0;
@@ -138,7 +139,7 @@ function draw(m, moving) {
   for (const p of lastDet) { const [x, y, w, h] = p.bbox; octx.strokeStyle = '#9ece6a'; octx.strokeRect(x, y, w, h);
     octx.fillStyle = '#9ece6a'; octx.fillText(`person ${(p.score * 100) | 0}%`, x + 4, y + 18); }
   for (const f of lastFaces) { const b = f.box; octx.strokeStyle = f.name === 'Unknown' ? '#f7768e' : '#7aa2f7'; octx.strokeRect(b.x, b.y, b.width, b.height);
-    octx.fillStyle = octx.strokeStyle; octx.fillText(f.name, b.x, b.y - 6); }
+    octx.fillStyle = octx.strokeStyle; octx.fillText(f.label || f.name, b.x, b.y - 6); }
   if ($('lineOn').checked) { const pos = +$('linePos').value; octx.strokeStyle = '#bb9af7'; octx.beginPath();
     if ($('lineOri').value === 'v') { octx.moveTo(pos * W, 0); octx.lineTo(pos * W, H); } else { octx.moveTo(0, pos * H); octx.lineTo(W, pos * H); }
     octx.stroke(); octx.fillStyle = '#bb9af7'; octx.fillText(`IN ${counts.in}  OUT ${counts.out}`, 10, H - 12); }
@@ -188,7 +189,7 @@ async function loadFaces() {
       await FA.nets.tinyFaceDetector.loadFromUri(FACE_MODELS);
       await FA.nets.faceLandmark68Net.loadFromUri(FACE_MODELS);
       await FA.nets.faceRecognitionNet.loadFromUri(FACE_MODELS);
-      faceReady = true; if (running) $('enrollBtn').disabled = false;
+      faceReady = true; $('faceOn').checked = true; if (running) $('enrollBtn').disabled = false;
       status((running ? 'Running' : 'Face models ready') + ' · faces on · ' + window.TF_BACKEND); return true;
     } catch (err) {
       console.error(err); const msg = 'Face model load failed [' + (window.TF_BACKEND || 'no backend') + ']: ' + (err && err.message || err); const _u = 'Face model load failed: ' + (err && err.message || err);
@@ -200,32 +201,121 @@ async function loadFaces() {
 $('faceOn').onchange = e => { if (e.target.checked) loadFaces(); };
 $('faceRetry').onclick = () => { $('faceOn').checked = true; loadFaces(); };
 const faceOpts = () => new FA.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+// ---------- unknown faces queue ----------
+let unknowns = LS.get('unknowns', []); // [{id, desc, thumb, firstSeen, lastSeen, count}]
+const UNKNOWN_MAX = 20, MATCH_THR = 0.55, UNKNOWN_DEDUPE = 0.5;
+const saveUnknowns = () => { try { LS.set('unknowns', unknowns); } catch { unknowns = unknowns.slice(-10); LS.set('unknowns', unknowns); } };
+function noteUnknown(desc, box) {
+  let best = null, bd = UNKNOWN_DEDUPE;
+  for (const u of unknowns) { const d = FA.euclideanDistance(desc, u.desc); if (d < bd) { bd = d; best = u; } }
+  const now = Date.now();
+  if (best) { best.lastSeen = now; best.count++; saveUnknowns(); return best.id; }
+  if (unknowns.length >= UNKNOWN_MAX) return null; // queue full: still shown as Unknown, not queued
+  const u = { id: 'U' + now.toString(36).slice(-5).toUpperCase(), desc: Array.from(desc), thumb: faceThumb(video, box), firstSeen: now, lastSeen: now, count: 1 };
+  unknowns.push(u); saveUnknowns(); renderUnknowns();
+  if ($('tgOn').checked) fetch(u.thumb).then(r => r.blob()).then(b => sendTelegram(b, `Unknown person (${u.id}) — please label in admin panel`));
+  return u.id;
+}
+function renderUnknowns() {
+  const n = unknowns.length; $('unkCount').textContent = n; $('unkBadge').hidden = !n; $('unkCard').hidden = !n;
+  const list = $('unkList'); list.innerHTML = '';
+  for (const u of [...unknowns].reverse()) {
+    const c = document.createElement('div'); c.className = 'unk';
+    const im = new Image(); im.src = u.thumb; c.appendChild(im);
+    const info = document.createElement('div'); info.className = 'unkinfo';
+    const meta = document.createElement('div'); meta.className = 'hint'; meta.textContent = `${u.id} · seen ${u.count}× · last ${new Date(u.lastSeen).toLocaleTimeString()}`;
+    const inp = document.createElement('input'); inp.placeholder = 'Name'; inp.setAttribute('list', 'knownNames');
+    const save = document.createElement('button'); save.textContent = 'Save'; save.className = 'primary';
+    const ign = document.createElement('button'); ign.textContent = 'Ignore';
+    save.onclick = () => labelUnknown(u.id, inp.value.trim()); inp.onkeydown = e => e.key === 'Enter' && save.click();
+    ign.onclick = () => { unknowns = unknowns.filter(x => x.id !== u.id); attendance = attendance.filter(a => a.name !== 'Unknown ' + u.id); LS.set('attendance', attendance); saveUnknowns(); renderUnknowns(); renderAtt(); };
+    const row = document.createElement('div'); row.className = 'row'; row.append(inp, save, ign);
+    info.append(meta, row); c.appendChild(info); list.appendChild(c);
+  }
+  $('knownNames').innerHTML = [...new Set(faces.map(f => f.name))].map(x => `<option value="${x.replace(/"/g, '&quot;')}">`).join('');
+}
+function labelUnknown(id, name) {
+  if (!name) return alert('Enter a name');
+  const u = unknowns.find(x => x.id === id); if (!u) return;
+  faces.push({ name, desc: u.desc, thumb: u.thumb }); saveFaces();
+  let n = 0; for (const a of attendance) if (a.name === 'Unknown ' + id) { a.name = name; n++; } // backfill
+  LS.set('attendance', attendance); unknowns = unknowns.filter(x => x.id !== id); saveUnknowns();
+  renderFaces(); renderUnknowns(); renderAtt(); status(`Labeled ${id} as ${name}${n ? ` (${n} attendance row${n > 1 ? 's' : ''} updated)` : ''}`);
+}
 async function recognize() {
   if (!$('faceOn').checked) return [];
   const res = await FA.detectAllFaces(video, faceOpts()).withFaceLandmarks().withFaceDescriptors();
   const out = res.map(r => {
-    let best = 'Unknown', bd = 0.55;
+    let best = 'Unknown', bd = MATCH_THR;
     for (const f of faces) { const d = FA.euclideanDistance(r.descriptor, f.desc); if (d < bd) { bd = d; best = f.name; } }
-    return { name: best, box: r.detection.box };
+    let label = best;
+    if (best === 'Unknown' && r.detection.score > 0.6) { const id = noteUnknown(r.descriptor, r.detection.box); if (id) label = 'Unknown ' + id; }
+    return { name: best, label, box: r.detection.box };
   });
-  out.forEach(f => f.name !== 'Unknown' && logAttendance(f.name));
+  out.forEach(f => f.label !== 'Unknown' && logAttendance(f.label));
   return out;
 }
 $('enrollBtn').onclick = async () => {
   const name = $('enrollName').value.trim(); if (!name) return alert('Enter a name first');
   const r = await FA.detectSingleFace(video, faceOpts()).withFaceLandmarks().withFaceDescriptor();
   if (!r) return alert('No face found — face the camera and try again');
-  faces.push({ name, desc: Array.from(r.descriptor) }); LS.set('faces', faces); $('enrollName').value = ''; renderFaces();
+  faces.push({ name, desc: Array.from(r.descriptor), thumb: faceThumb(video, r.detection.box) }); saveFaces(); $('enrollName').value = ''; renderFaces();
   alert(`Enrolled ${name} (${faces.filter(f => f.name === name).length} sample(s)). Add 2–3 samples for best accuracy.`);
 };
+function faceThumb(src, box) {
+  const c = document.createElement('canvas'); c.width = c.height = 64; const pad = box.width * 0.2;
+  c.getContext('2d').drawImage(src, box.x - pad, box.y - pad, box.width + 2 * pad, box.height + 2 * pad, 0, 0, 64, 64);
+  return c.toDataURL('image/jpeg', 0.7);
+}
+function saveFaces() {
+  try { LS.set('faces', faces); } catch (e) { faces.forEach(f => delete f.thumb); LS.set('faces', faces); } // quota: drop thumbs
+}
 function renderFaces() {
+  if ($('knownNames')) $('knownNames').innerHTML = [...new Set(faces.map(f => f.name))].map(x => `<option value="${x.replace(/"/g, '&quot;')}">`).join('');
   const names = [...new Set(faces.map(f => f.name))];
   $('faceList').innerHTML = names.length ? '' : '<p class="hint">No faces enrolled.</p>';
-  for (const n of names) { const s = document.createElement('span'); s.className = 'face'; s.textContent = `${n} (${faces.filter(f => f.name === n).length})`;
-    const b = document.createElement('button'); b.textContent = '✕'; b.onclick = () => { faces = faces.filter(f => f.name !== n); LS.set('faces', faces); renderFaces(); };
-    s.appendChild(b); $('faceList').appendChild(s); }
+  for (const n of names) {
+    const mine = faces.filter(f => f.name === n), s = document.createElement('div'); s.className = 'person';
+    const t = mine.find(f => f.thumb); if (t) { const im = new Image(); im.src = t.thumb; s.appendChild(im); }
+    const lbl = document.createElement('span'); lbl.textContent = `${n} · ${mine.length} photo${mine.length > 1 ? 's' : ''}`; s.appendChild(lbl);
+    const b = document.createElement('button'); b.textContent = 'Delete'; b.className = 'small';
+    b.onclick = () => { if (confirm(`Delete ${n}?`)) { faces = faces.filter(f => f.name !== n); saveFaces(); renderFaces(); } };
+    s.appendChild(b); $('faceList').appendChild(s);
+  }
 }
-
+const nameFromFile = fn => fn.replace(/\.[^.]+$/, '').replace(/[_\-\s]*\(?\d+\)?$/, '').replace(/[_\-]+/g, ' ').trim();
+function loadImage(file) {
+  return new Promise((res, rej) => { const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => res({ im, url }); im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('cannot decode image')); }; im.src = url; });
+}
+$('bulkFiles').onchange = async e => {
+  let files = [...e.target.files]; const out = $('bulkResults'); out.innerHTML = '';
+  if (!files.length) return;
+  if (files.length > 10) { out.innerHTML = `<p class="hint">Only the first 10 of ${files.length} photos are used.</p>`; files = files.slice(0, 10); }
+  const typed = $('enrollName').value.trim();
+  if (!(await loadFaces())) { out.innerHTML += '<p class="err">Face models failed to load — see error above.</p>'; return; }
+  let ok = 0;
+  for (const f of files) {
+    const row = document.createElement('div'); row.className = 'bres'; const msg = document.createElement('span');
+    const name = typed || nameFromFile(f.name); msg.textContent = `${f.name} → ${name || '?'}: processing…`; out.appendChild(row);
+    try {
+      if (!name) throw new Error('no name (type one or use name_1.jpg)');
+      const { im, url } = await loadImage(f); const th = new Image(); th.src = url; row.appendChild(th); row.appendChild(msg);
+      // big phone photos: downscale for speed
+      const sc = Math.min(1, 1024 / Math.max(im.naturalWidth, im.naturalHeight)), c = document.createElement('canvas');
+      c.width = Math.round(im.naturalWidth * sc); c.height = Math.round(im.naturalHeight * sc); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+      let dets = await FA.detectAllFaces(c, new FA.TinyFaceDetectorOptions({ inputSize: 608, scoreThreshold: 0.4 })).withFaceLandmarks().withFaceDescriptors();
+      if (!dets.length) throw new Error('no face found');
+      const best = dets.reduce((a, b) => a.detection.box.area > b.detection.box.area ? a : b);
+      faces.push({ name, desc: Array.from(best.descriptor), thumb: faceThumb(c, best.detection.box) }); ok++;
+      msg.textContent = `${f.name} → ${name}: ✅ ok${dets.length > 1 ? ` (${dets.length} faces, used largest)` : ''}`; row.classList.add('ok');
+    } catch (err) {
+      if (!row.contains(msg)) row.appendChild(msg); msg.textContent = `${f.name} → ${name || '?'}: ❌ ${err.message}`; row.classList.add('bad');
+    }
+  }
+  saveFaces(); renderFaces(); e.target.value = '';
+  out.insertAdjacentHTML('afterbegin', `<p class="hint">${ok} of ${files.length} photos enrolled.</p>`);
+};
 // ---------- attendance ----------
 function logAttendance(name) {
   const now = Date.now(), gap = +$('gap').value * 60000;
@@ -245,4 +335,5 @@ $('csvBtn').onclick = () => {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `attendance_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
 };
 $('clearAtt').onclick = () => { if (confirm('Clear attendance log?')) { attendance = []; LS.set('attendance', attendance); renderAtt(); } };
-renderFaces(); renderAtt();
+renderFaces(); renderAtt(); renderUnknowns();
+$('unkBadge').onclick = () => $('unkCard').scrollIntoView({ behavior: 'smooth' });
