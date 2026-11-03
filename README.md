@@ -20,6 +20,7 @@ It comes in two versions with the same modules:
 | 8 | **Crowd / occupancy** | Live count, alert above a limit | ✅ | ✅ |
 | 9 | **Animal detection** | Logs animals (cow, dog, horse, sheep, bird, cat, …) | ✅ | `--dnn` |
 | 10 | **Vehicle log** | Logs cars, trucks, buses, motorcycles, bicycles (web) | ✅ | via after_hours / `--dnn` |
+| 14 | **Number plates (ANPR)** | Per tracked vehicle: finds the plate in the box, OCRs it, normalizes to Indian format (e.g. `WB06F5977`), logs IN/OUT time + snapshot, "vehicles currently inside" table, watchlist alerts, CSV. Also "read plate from photo". | tesseract.js (vendored) | pytesseract (`--ocr`) |
 | 11 | **After-hours activity** | Any person or vehicle during a night window (default 20:00–06:00) | ✅ | ✅ |
 | 12 | **Camera tamper** | Covered or dark, blurred (Laplacian sharpness), moved (scene change) | ✅ | ✅ |
 | 13 | **Fire / smoke** ⚠️ *experimental* | Color + flicker heuristic. **Not a smoke alarm.** | ✅ | ✅ |
@@ -30,6 +31,10 @@ Shared across all modules: a single **event bus**. Every event goes into one log
 which you can export as CSV. Each module has its own **Telegram on/off switch and cooldown**.
 
 **Not included: PPE (helmet/vest) detection.** No small, openly licensed model that runs in the browser or on the Pi CPU is readily available.
+
+### Number plates: how it works and limits
+Vehicles come from the detector (COCO-SSD on web, `--dnn` on Pi). For each new vehicle track the module searches the box for the plate (bright rectangular blob + edge-dense windows), segments the characters, estimates the tilt and deskews, then runs Tesseract (a few throttled attempts per vehicle, keeping the best). Results are normalized to `A-Z0-9` with Indian-format repair (e.g. `O→0` in digit positions, `NB→WB`). Direction: optional IN line; otherwise first read = IN and "not seen for N min" = OUT.
+Limits: this is generic OCR, not a trained ANPR model. It needs a fairly close, sharp, daylight, front/rear view (plate ≥ ~100 px wide). Expect misreads at night, at an angle, with motion blur, with fancy fonts or two-line plates. Treat reads as hints and check the snapshot.
 
 ### Honest limitations
 - **Fight** and **fire/smoke** are hand-written heuristics, not trained classifiers. Expect false alarms (dancing, sports, sunsets, red clothes) and missed events. Never rely on them for safety.
@@ -64,6 +69,7 @@ curl -sSL https://raw.githubusercontent.com/vibhvesh/pi-motion-cam/main/get.sh |
 | `--dnn` | MobileNet-SSD detector (people + animals + vehicles) → set `detector.type: mobilenet_ssd` | ~23 MB |
 | `--pose` | MoveNet Lightning TFLite + `ai-edge-litert` → set `pose.enabled: true` | ~3 MB |
 | `--face` | `face_recognition` (dlib) for attendance | 30+ min build |
+| `--ocr` | `tesseract-ocr` + `pytesseract` for the number plate module → set `modules.plates.enabled: true` | ~30 MB |
 
 The installer clones the repo to `~/pi-motion-cam` and creates a venv (`--system-site-packages`, so apt's picamera2/OpenCV are visible).
 
@@ -108,6 +114,7 @@ Put clear photos in `known_faces/`, one or more per person: `alice.jpg`, `alice_
 | `captures/` | Annotated snapshots (boxes, IDs, lines, zones) for every event, plus face crops |
 | `attendance/YYYY-MM-DD.csv` | Attendance |
 | `summaries/YYYY-MM-DD.json` | Daily summary |
+| `plates/YYYY-MM-DD.csv` | Number plates: plate, IN/OUT, time, confidence, snapshot |
 
 ### 7. Autostart service
 `install.sh` generates `pi-motion-cam.local.service` with your user and path filled in:

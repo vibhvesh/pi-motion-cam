@@ -1,7 +1,7 @@
 /* Pi Motion Cam web — core: camera, detection, tracking, pose, event bus, Telegram, module registry. */
 'use strict';
 const SC = (() => {
-  const VERSION = '5';
+  const VERSION = '6';
   const $ = id => document.getElementById(id);
   const LS = {
     get: (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } },

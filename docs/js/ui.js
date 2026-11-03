@@ -197,6 +197,15 @@ ${common(t)}
   fire_smoke:
 ${common(fs)}
     hold_seconds: ${fs.holdSec}
+  plates:
+${common(c('plates'))}
+    classes: ${cls(c('plates').classes)}
+    line: ${c('plates').line ? pts(c('plates').line) : 'null'}
+    tries: ${c('plates').tries}
+    min_confidence: ${c('plates').minConf}
+    indian_only: ${!!c('plates').indianOnly}
+    out_after_minutes: ${c('plates').outMin}
+    watchlist: ${JSON.stringify(c('plates').watchlist.toUpperCase().split(/[\s,;]+/).filter(Boolean))}
   after_hours:
 ${common(ah)}
     active_hours: ${JSON.stringify(ah.schedule || '20:00-06:00')}

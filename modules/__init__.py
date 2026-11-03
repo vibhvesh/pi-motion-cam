@@ -5,13 +5,14 @@ from .attendance import AttendanceModule
 from .behavior import FallModule, FightModule
 from .counter import CounterModule
 from .motion_alert import MotionAlertModule
+from .plates import PlateModule
 from .scene import FireSmokeModule, TamperModule
 from .zones import AfterHoursModule, AnimalModule, LoiteringModule, OccupancyModule, PerimeterModule, ZoneIntrusionModule
 
 log = logging.getLogger("motioncam")
 REGISTRY = {m.name: m for m in [MotionAlertModule, AttendanceModule, CounterModule, ZoneIntrusionModule, FallModule,
                                 FightModule, PerimeterModule, LoiteringModule, OccupancyModule, AnimalModule,
-                                TamperModule, FireSmokeModule, AfterHoursModule]}
+                                TamperModule, FireSmokeModule, AfterHoursModule, PlateModule]}
 
 
 def load_modules(mod_cfg, ctx):

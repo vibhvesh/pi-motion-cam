@@ -44,3 +44,4 @@ table{width:100%;border-collapse:collapse;font-size:.78rem}td,th{border-bottom:1
 .unk{display:flex;gap:8px;background:#0f1419;border-radius:8px;padding:8px;margin:6px 0;border:1px solid #e0af68}.unk img{width:64px;height:64px;border-radius:8px;object-fit:cover}.unkinfo{flex:1;min-width:0}
 input[type=file]{display:block;margin-top:6px;width:100%;font-size:.8rem}
 footer{text-align:center;font-size:.75rem;color:#777;padding:16px}a{color:#7aa2f7}code{font-size:.85em}
+.plimg{width:110px;border-radius:3px;margin-bottom:2px}

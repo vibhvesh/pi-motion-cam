@@ -136,6 +136,18 @@ modules:
     hold_seconds: 4
     cooldown_seconds: 120
 
+  plates:                    # 12. vehicles & number plates (needs detector.type: mobilenet_ssd + ./install.sh --ocr)
+    enabled: false
+    classes: [car, bus, motorbike]
+    line: null                        # optional direction line [[x,y],[x,y]]; else IN = first read, OUT = not seen
+    tries: 4                          # OCR attempts per vehicle (retries on later frames)
+    min_confidence: 55
+    indian_only: false                # only accept plates matching the Indian format (MH12AB1234 / 22BH1234AA)
+    out_after_minutes: 2
+    watchlist: []                     # e.g. [MH12AB1234] -> alert severity
+    dir: plates                       # plates/YYYY-MM-DD.csv
+    cooldown_seconds: 5
+
   after_hours:               # 11. any person/vehicle during the night window
     enabled: false
     active_hours: "20:00-06:00"
