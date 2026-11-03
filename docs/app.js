@@ -4,16 +4,40 @@ const video = $('video'), overlay = $('overlay'), octx = overlay.getContext('2d'
 const small = document.createElement('canvas'); small.width = 160; small.height = 120;
 const sctx = small.getContext('2d', { willReadFrequently: true });
 const LS = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => localStorage.setItem(k, JSON.stringify(v)) };
-const FACE_JS = 'vendor/face-api.min.js'; // @vladmandic/face-api 1.7.13, vendored same-origin
-const FACE_MODELS = 'models/face/';
-const COCO_MODEL = 'models/coco/model.json';
+const APP_VERSION = '3';
+const FACE_JS = 'vendor/face-api.esm-nobundle.js?v=' + APP_VERSION; // @vladmandic/face-api 1.7.13 no-bundle build, patched to use the page's global tf (single tfjs)
+const FACE_MODELS = 'models/face-v' + APP_VERSION + '/';          // versioned dir = cache-bust
+const COCO_MODEL = 'models/coco-v' + APP_VERSION + '/model.json';
 
 let stream = null, running = false, cocoModel = null, faceReady = false, FA = null, faceLoading = null; // NB: don't name this 'faceapi' (collides with the library's global)
 let prevGray = null, lastSnap = 0, lastDet = [], lastFaces = [], busy = false, frameNo = 0;
 let counts = LS.get('counts', { in: 0, out: 0 }), track = null;
 let faces = LS.get('faces', []);           // [{name, desc:[128 floats]}]
 let attendance = LS.get('attendance', []); // [{name, in, out}]
-const status = t => $('status').textContent = t;
+const status = t => { $('status').textContent = t; $('status').title = t; };
+// ---------- tfjs backend: webgl -> wasm -> cpu ----------
+let backendReady = null;
+function initBackend() {
+  if (backendReady) return backendReady;
+  backendReady = (async () => {
+    const errs = [];
+    if (tf.wasm?.setWasmPaths) tf.wasm.setWasmPaths(new URL('vendor/', location.href).href);
+    const forced = new URLSearchParams(location.search).get('backend'); // e.g. ?backend=wasm for testing
+    const order = forced ? [forced, ...['webgl', 'wasm', 'cpu'].filter(x => x !== forced)] : ['webgl', 'wasm', 'cpu'];
+    for (const b of order) {
+      try {
+        status('Initialising ' + b + ' backend…');
+        if (!(await tf.setBackend(b))) throw new Error('setBackend returned false');
+        await tf.ready();
+        if (b === 'webgl') tf.tidy(() => tf.ones([2, 2]).add(1).dataSync()); // smoke test
+        window.TF_BACKEND = b; console.log('tf backend', b, 'errors', errs); return b;
+      } catch (e) { errs.push(b + ': ' + (e?.message || e)); console.warn('backend', b, 'failed', e); }
+    }
+    throw new Error('No TF backend available (' + errs.join('; ') + ')');
+  })();
+  backendReady.catch(() => { backendReady = null; });
+  return backendReady;
+}
 
 // ---------- settings ----------
 const sliders = { motionThr: v => v + '%', pixThr: v => v, conf: v => v, cool: v => v + 's', linePos: v => Math.round(v * 100) + '%' };
@@ -39,8 +63,8 @@ $('startBtn').onclick = async () => {
   overlay.width = video.videoWidth; overlay.height = video.videoHeight;
   running = true; $('startBtn').disabled = true; $('stopBtn').disabled = false; $('snapBtn').disabled = false;
   if (faceReady) $('enrollBtn').disabled = false;
-  if (!cocoModel) { status('Loading person detector…'); try { cocoModel = await cocoSsd.load({ base: 'lite_mobilenet_v2', modelUrl: COCO_MODEL }); } catch (e) { status('Person detector failed: ' + e.message); return; } }
-  status('Running'); loop();
+  if (!cocoModel) { try { await initBackend(); status('Loading person detector (' + window.TF_BACKEND + ')…'); cocoModel = await cocoSsd.load({ base: 'lite_mobilenet_v2', modelUrl: COCO_MODEL }); } catch (e) { status('Person detector failed: ' + e.message); return; } }
+  status('Running · ' + window.TF_BACKEND); loop();
 };
 $('stopBtn').onclick = () => {
   running = false; stream?.getTracks().forEach(t => t.stop()); stream = null; prevGray = null;
@@ -158,17 +182,17 @@ async function loadFaces() {
   faceError(''); status('Loading face models…');
   faceLoading = (async () => {
     try {
-      if (!window.faceapi) await loadScript(FACE_JS).catch(() => { throw new Error('could not load ' + FACE_JS); });
-      FA = window.faceapi; if (!FA || !FA.nets) throw new Error('face-api library did not initialise');
-      await FA.tf?.ready?.();
+      await initBackend();
+      try { FA = await import(new URL(FACE_JS, location.href).href); } catch (e) { throw new Error('could not load face-api: ' + (e?.message || e)); }
+      if (!FA || !FA.nets) throw new Error('face-api library did not initialise');
       await FA.nets.tinyFaceDetector.loadFromUri(FACE_MODELS);
       await FA.nets.faceLandmark68Net.loadFromUri(FACE_MODELS);
       await FA.nets.faceRecognitionNet.loadFromUri(FACE_MODELS);
       faceReady = true; if (running) $('enrollBtn').disabled = false;
-      status(running ? 'Running (faces on)' : 'Face models ready'); return true;
+      status((running ? 'Running' : 'Face models ready') + ' · faces on · ' + window.TF_BACKEND); return true;
     } catch (err) {
-      console.error(err); const msg = 'Face model load failed: ' + (err && err.message || err);
-      status('Face model load failed'); faceError(msg); $('faceOn').checked = false; return false;
+      console.error(err); const msg = 'Face model load failed [' + (window.TF_BACKEND || 'no backend') + ']: ' + (err && err.message || err); const _u = 'Face model load failed: ' + (err && err.message || err);
+      status(msg); faceError(msg); $('faceOn').checked = false; return false;
     } finally { faceLoading = null; }
   })();
   return faceLoading;

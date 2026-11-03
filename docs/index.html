@@ -2,10 +2,10 @@
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pi Motion Cam – Web</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=3">
 <link rel="icon" href="data:,">
 </head><body>
-<header><h1>📷 Pi Motion Cam <small>web</small></h1><span id="status">Idle</span></header>
+<header><h1>📷 Pi Motion Cam <small>web v3</small></h1><span id="status">Idle</span></header>
 <main>
 <section class="card">
   <div class="stage"><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
@@ -58,7 +58,8 @@
 </section>
 </main>
 <footer>All processing happens locally in your browser. <a href="https://github.com/vibhvesh/pi-motion-cam">Raspberry Pi version on GitHub</a></footer>
-<script src="vendor/tf.min.js"></script>
-<script src="vendor/coco-ssd.min.js"></script>
-<script src="app.js"></script>
+<script src="vendor/tf.min.js?v=3"></script>
+<script src="vendor/tf-backend-wasm.min.js?v=3"></script>
+<script src="vendor/coco-ssd.min.js?v=3"></script>
+<script src="app.js?v=3"></script>
 </body></html>

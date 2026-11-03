@@ -15,3 +15,4 @@ table{width:100%;border-collapse:collapse;font-size:.8rem;margin-top:8px}td,th{b
 #gallery figcaption{font-size:.72rem;color:#aaa}.face{display:inline-flex;gap:4px;align-items:center;background:#2a3442;border-radius:12px;padding:3px 8px;margin:3px;font-size:.8rem}
 .face button{padding:0 4px;background:none}footer{text-align:center;font-size:.75rem;color:#777;padding:16px}a{color:#7aa2f7}
 .err{background:#3b1d24;color:#f7768e;border-radius:6px;padding:8px;font-size:.8rem;margin:6px 0;word-break:break-word}
+#status{max-width:65%;text-align:right;word-break:break-word}
