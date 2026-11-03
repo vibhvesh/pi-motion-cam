@@ -4,10 +4,11 @@ const video = $('video'), overlay = $('overlay'), octx = overlay.getContext('2d'
 const small = document.createElement('canvas'); small.width = 160; small.height = 120;
 const sctx = small.getContext('2d', { willReadFrequently: true });
 const LS = { get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set: (k, v) => localStorage.setItem(k, JSON.stringify(v)) };
-const FACE_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/dist/face-api.js';
-const FACE_MODELS = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model/';
+const FACE_JS = 'vendor/face-api.min.js'; // @vladmandic/face-api 1.7.13, vendored same-origin
+const FACE_MODELS = 'models/face/';
+const COCO_MODEL = 'models/coco/model.json';
 
-let stream = null, running = false, cocoModel = null, faceReady = false, faceapi = null;
+let stream = null, running = false, cocoModel = null, faceReady = false, FA = null, faceLoading = null; // NB: don't name this 'faceapi' (collides with the library's global)
 let prevGray = null, lastSnap = 0, lastDet = [], lastFaces = [], busy = false, frameNo = 0;
 let counts = LS.get('counts', { in: 0, out: 0 }), track = null;
 let faces = LS.get('faces', []);           // [{name, desc:[128 floats]}]
@@ -38,7 +39,7 @@ $('startBtn').onclick = async () => {
   overlay.width = video.videoWidth; overlay.height = video.videoHeight;
   running = true; $('startBtn').disabled = true; $('stopBtn').disabled = false; $('snapBtn').disabled = false;
   if (faceReady) $('enrollBtn').disabled = false;
-  if (!cocoModel) { status('Loading person detector…'); cocoModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' }); }
+  if (!cocoModel) { status('Loading person detector…'); try { cocoModel = await cocoSsd.load({ base: 'lite_mobilenet_v2', modelUrl: COCO_MODEL }); } catch (e) { status('Person detector failed: ' + e.message); return; } }
   status('Running'); loop();
 };
 $('stopBtn').onclick = () => {
@@ -151,22 +152,36 @@ $('tgTest').onclick = async () => { if (await sendTelegram(null, 'Pi Motion Cam 
 
 // ---------- faces ----------
 function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); }); }
-$('faceOn').onchange = async e => {
-  if (!e.target.checked || faceReady) return;
-  status('Loading face models…');
-  try {
-    await loadScript(FACE_CDN); faceapi = window.faceapi;
-    await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS), faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS), faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS)]);
-    faceReady = true; if (running) $('enrollBtn').disabled = false; status(running ? 'Running (faces on)' : 'Face models ready');
-  } catch (err) { status('Face model load failed'); e.target.checked = false; console.error(err); }
-};
-const faceOpts = () => new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+function faceError(msg) { const e = $('faceErr'); e.hidden = !msg; e.textContent = msg || ''; $('faceRetry').hidden = !msg; }
+async function loadFaces() {
+  if (faceReady) return true; if (faceLoading) return faceLoading;
+  faceError(''); status('Loading face models…');
+  faceLoading = (async () => {
+    try {
+      if (!window.faceapi) await loadScript(FACE_JS).catch(() => { throw new Error('could not load ' + FACE_JS); });
+      FA = window.faceapi; if (!FA || !FA.nets) throw new Error('face-api library did not initialise');
+      await FA.tf?.ready?.();
+      await FA.nets.tinyFaceDetector.loadFromUri(FACE_MODELS);
+      await FA.nets.faceLandmark68Net.loadFromUri(FACE_MODELS);
+      await FA.nets.faceRecognitionNet.loadFromUri(FACE_MODELS);
+      faceReady = true; if (running) $('enrollBtn').disabled = false;
+      status(running ? 'Running (faces on)' : 'Face models ready'); return true;
+    } catch (err) {
+      console.error(err); const msg = 'Face model load failed: ' + (err && err.message || err);
+      status('Face model load failed'); faceError(msg); $('faceOn').checked = false; return false;
+    } finally { faceLoading = null; }
+  })();
+  return faceLoading;
+}
+$('faceOn').onchange = e => { if (e.target.checked) loadFaces(); };
+$('faceRetry').onclick = () => { $('faceOn').checked = true; loadFaces(); };
+const faceOpts = () => new FA.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
 async function recognize() {
   if (!$('faceOn').checked) return [];
-  const res = await faceapi.detectAllFaces(video, faceOpts()).withFaceLandmarks().withFaceDescriptors();
+  const res = await FA.detectAllFaces(video, faceOpts()).withFaceLandmarks().withFaceDescriptors();
   const out = res.map(r => {
     let best = 'Unknown', bd = 0.55;
-    for (const f of faces) { const d = faceapi.euclideanDistance(r.descriptor, f.desc); if (d < bd) { bd = d; best = f.name; } }
+    for (const f of faces) { const d = FA.euclideanDistance(r.descriptor, f.desc); if (d < bd) { bd = d; best = f.name; } }
     return { name: best, box: r.detection.box };
   });
   out.forEach(f => f.name !== 'Unknown' && logAttendance(f.name));
@@ -174,7 +189,7 @@ async function recognize() {
 }
 $('enrollBtn').onclick = async () => {
   const name = $('enrollName').value.trim(); if (!name) return alert('Enter a name first');
-  const r = await faceapi.detectSingleFace(video, faceOpts()).withFaceLandmarks().withFaceDescriptor();
+  const r = await FA.detectSingleFace(video, faceOpts()).withFaceLandmarks().withFaceDescriptor();
   if (!r) return alert('No face found — face the camera and try again');
   faces.push({ name, desc: Array.from(r.descriptor) }); LS.set('faces', faces); $('enrollName').value = ''; renderFaces();
   alert(`Enrolled ${name} (${faces.filter(f => f.name === name).length} sample(s)). Add 2–3 samples for best accuracy.`);
