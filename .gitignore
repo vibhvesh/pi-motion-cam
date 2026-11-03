@@ -1,0 +1,9 @@
+venv/
+captures/*
+!captures/.gitkeep
+known_faces/*
+!known_faces/.gitkeep
+attendance/
+events.csv
+*.local.service
+__pycache__/

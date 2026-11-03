@@ -1,0 +1,40 @@
+camera:
+  lores_size: [320, 240]     # low-res stream used for motion detection
+  main_size: [2304, 1296]    # full-res capture size
+  framerate: 10
+motion:
+  pixel_threshold: 25        # per-pixel diff threshold (0-255)
+  min_area: 800              # min changed pixels (lores) to count as motion
+  blur: 21                   # gaussian blur kernel (odd)
+  cooldown_seconds: 30       # min time between alerts
+  warmup_seconds: 2
+person_detection:
+  enabled: true
+  require_person: true       # only alert if a person is detected
+  win_stride: [8, 8]
+  scale: 1.05
+  detect_width: 640          # resize full-res to this width for HOG (speed)
+face_recognition:
+  enabled: false
+  known_faces_dir: known_faces
+  tolerance: 0.6
+telegram:
+  enabled: true
+  bot_token: ""              # or env TELEGRAM_BOT_TOKEN
+  chat_id: ""                # or env TELEGRAM_CHAT_ID
+output:
+  save_dir: captures
+  jpeg_quality: 90
+attendance:
+  enabled: false             # needs face_recognition.enabled: true
+  dir: attendance            # attendance/YYYY-MM-DD.csv
+  relog_gap_minutes: 30      # seen again within gap -> update OUT time; after gap -> new IN row
+direction:
+  enabled: false
+  orientation: vertical      # vertical line (left/right) or horizontal (top/bottom)
+  position: 0.5              # line position as fraction of width/height
+  in_direction: left_to_right  # left_to_right | right_to_left | top_to_bottom | bottom_to_top
+  min_blob_area: 300         # lores px
+  max_jump_px: 80            # bigger centroid jump = new track
+  events_file: events.csv
+  alert_window_seconds: 10   # crossing this recent is included in Telegram caption

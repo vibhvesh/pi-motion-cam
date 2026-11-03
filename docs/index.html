@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pi Motion Cam – Web</title>
+<link rel="stylesheet" href="style.css">
+</head><body>
+<header><h1>📷 Pi Motion Cam <small>web</small></h1><span id="status">Idle</span></header>
+<main>
+<section class="card">
+  <div class="stage"><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div>
+  <div class="row">
+    <button id="startBtn" class="primary">Start camera</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <button id="snapBtn" disabled>Snapshot</button>
+  </div>
+  <div class="stats"><span>Motion: <b id="motionVal">0</b>%</span><span>People: <b id="peopleVal">0</b></span>
+    <span>IN: <b id="inVal">0</b></span><span>OUT: <b id="outVal">0</b></span></div>
+</section>
+
+<section class="card">
+  <h2>Settings</h2>
+  <label>Motion threshold (% pixels changed): <b id="motionThrLbl"></b><input type="range" id="motionThr" min="0.2" max="20" step="0.1" value="2"></label>
+  <label>Pixel sensitivity (diff level): <b id="pixThrLbl"></b><input type="range" id="pixThr" min="5" max="100" value="30"></label>
+  <label>Person confidence: <b id="confLbl"></b><input type="range" id="conf" min="0.2" max="0.95" step="0.05" value="0.55"></label>
+  <label>Snapshot cooldown (s): <b id="coolLbl"></b><input type="range" id="cool" min="2" max="120" value="10"></label>
+  <label class="chk"><input type="checkbox" id="personOnly" checked> Only capture when a person is detected</label>
+  <h3>Virtual line</h3>
+  <label class="chk"><input type="checkbox" id="lineOn" checked> Enable in/out counting</label>
+  <label>Orientation <select id="lineOri"><option value="v">Vertical</option><option value="h">Horizontal</option></select></label>
+  <label>Position: <b id="linePosLbl"></b><input type="range" id="linePos" min="0.05" max="0.95" step="0.01" value="0.5"></label>
+  <label>IN direction <select id="inDir"><option value="pos">Left→Right / Top→Bottom</option><option value="neg">Right→Left / Bottom→Top</option></select></label>
+  <button id="resetCounts">Reset counts</button>
+</section>
+
+<section class="card">
+  <h2>Faces &amp; attendance</h2>
+  <label class="chk"><input type="checkbox" id="faceOn"> Enable face recognition (loads ~6 MB models)</label>
+  <div class="row"><input id="enrollName" placeholder="Name"><button id="enrollBtn" disabled>Enroll face from camera</button></div>
+  <div id="faceList"></div>
+  <label>Re-log gap (minutes): <input type="number" id="gap" value="30" min="1" style="width:5em"></label>
+  <table><thead><tr><th>Name</th><th>IN</th><th>OUT</th></tr></thead><tbody id="attBody"></tbody></table>
+  <div class="row"><button id="csvBtn">Export CSV</button><button id="clearAtt">Clear</button></div>
+</section>
+
+<section class="card">
+  <h2>Telegram alerts (optional)</h2>
+  <p class="hint">Stored only in this browser (localStorage). Sent directly from your browser to api.telegram.org.</p>
+  <input id="tgToken" placeholder="Bot token"><input id="tgChat" placeholder="Chat ID">
+  <label class="chk"><input type="checkbox" id="tgOn"> Send snapshots to Telegram</label>
+  <button id="tgTest">Send test message</button>
+</section>
+
+<section class="card wide">
+  <h2>Snapshots <button id="clearSnaps" class="small">Clear</button></h2>
+  <div id="gallery"></div>
+</section>
+</main>
+<footer>All processing happens locally in your browser. <a href="https://github.com/vibhvesh/pi-motion-cam">Raspberry Pi version on GitHub</a></footer>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script src="app.js"></script>
+</body></html>
