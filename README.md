@@ -6,6 +6,8 @@ It comes in two versions with the same modules:
 - **Raspberry Pi 5** with a Camera Module (Python + OpenCV, runs 24/7 as a service)
 - **Browser web app** at **https://vibhvesh.github.io/pi-motion-cam/**. It runs on a phone or laptop with all processing done locally, and is handy for trying modules and drawing zones.
 
+📘 **Operating guide:** see [SOP.md](SOP.md) for the Standard Operating Procedure & best practices (placement, enrollment, checklists, privacy/DPDP, security, troubleshooting).
+
 ## Modules
 
 | # | Module | What it does | Web | Pi |
