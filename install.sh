@@ -3,13 +3,14 @@
 #   --face   face recognition for attendance (builds dlib: 30+ min)
 #   --dnn    MobileNet-SSD detector (person + animals + vehicles, ~23 MB) for perimeter/animal/after-hours
 #   --ocr    Tesseract OCR for number plates (apt tesseract-ocr + pytesseract)
+#   --no-service  don't install/enable the systemd services (camera + web dashboard)
 #   --pose   MoveNet Lightning TFLite pose model (~3 MB) for better fall/fight detection
 set -e
 cd "$(dirname "$0")"
-FACE=0; DNN=0; POSE=0; OCR=0
-for a in "$@"; do case "$a" in --face) FACE=1;; --dnn) DNN=1;; --pose) POSE=1;; --ocr) OCR=1;; --all) FACE=1; DNN=1; POSE=1; OCR=1;; esac; done
+FACE=0; DNN=0; POSE=0; OCR=0; SVC=1
+for a in "$@"; do case "$a" in --face) FACE=1;; --dnn) DNN=1;; --pose) POSE=1;; --ocr) OCR=1;; --no-service) SVC=0;; --all) FACE=1; DNN=1; POSE=1; OCR=1;; esac; done
 sudo apt update
-sudo apt install -y python3-picamera2 python3-opencv python3-numpy python3-venv python3-yaml python3-requests curl
+sudo apt install -y python3-picamera2 python3-opencv python3-numpy python3-venv python3-yaml python3-requests python3-flask curl
 [ $FACE = 1 ] && sudo apt install -y cmake build-essential libopenblas-dev liblapack-dev libjpeg-dev
 python3 -m venv --system-site-packages venv
 ./venv/bin/pip install --upgrade pip
@@ -36,6 +37,27 @@ if [ $POSE = 1 ]; then
   echo "MoveNet installed. Set pose.enabled: true in config.yaml"
 fi
 sed -e "s|__USER__|$USER|g" -e "s|__DIR__|$PWD|g" pi-motion-cam.service > pi-motion-cam.local.service
-echo "Service file generated: $PWD/pi-motion-cam.local.service"
-echo "  Enable autostart: sudo cp pi-motion-cam.local.service /etc/systemd/system/pi-motion-cam.service && sudo systemctl daemon-reload && sudo systemctl enable --now pi-motion-cam"
-echo "Done. Enable modules in config.yaml, then run: ./venv/bin/python main.py"
+sed -e "s|__USER__|$USER|g" -e "s|__DIR__|$PWD|g" pi-motion-cam-web.service > pi-motion-cam-web.local.service
+if [ $SVC = 1 ]; then
+  sudo cp pi-motion-cam.local.service /etc/systemd/system/pi-motion-cam.service
+  sudo cp pi-motion-cam-web.local.service /etc/systemd/system/pi-motion-cam-web.service
+  # let the dashboard (runs as $USER) start/stop/restart the camera service and read its logs, nothing else
+  SC=$(command -v systemctl); JC=$(command -v journalctl)
+  printf '%s ALL=(root) NOPASSWD: %s start pi-motion-cam, %s stop pi-motion-cam, %s restart pi-motion-cam, %s -u pi-motion-cam *\n' "$USER" "$SC" "$SC" "$SC" "$JC" | sudo tee /etc/sudoers.d/pi-motion-cam >/dev/null
+  sudo chmod 440 /etc/sudoers.d/pi-motion-cam
+  sudo visudo -cf /etc/sudoers.d/pi-motion-cam >/dev/null || sudo rm -f /etc/sudoers.d/pi-motion-cam
+  sudo systemctl daemon-reload
+  sudo systemctl enable pi-motion-cam pi-motion-cam-web
+  sudo systemctl restart pi-motion-cam-web
+  sudo systemctl restart pi-motion-cam || true
+else
+  echo "Services not installed (--no-service). Run manually: ./venv/bin/python main.py  and  ./venv/bin/python -m webui.server"
+fi
+IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+PORT=$(./venv/bin/python -c "import yaml;print((yaml.safe_load(open('config.yaml')).get('web') or {}).get('port',8080))" 2>/dev/null || echo 8080)
+echo
+echo "============================================================"
+echo " Done. Dashboard: http://${IP:-<pi-ip>}:${PORT}   (also http://$(hostname).local:${PORT})"
+echo " Open it on a phone/PC on the same Wi-Fi to enable modules, label faces, view events."
+echo " Logs: journalctl -u pi-motion-cam -f   |   sudo systemctl restart pi-motion-cam"
+echo "============================================================"

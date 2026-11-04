@@ -12,3 +12,9 @@ unknown_faces/
 events/
 summaries/
 plates/
+.web_secret
+.live/
+config.yaml.bak
+config.yaml.tmp
+config.yaml.upstream
+config.yaml.user

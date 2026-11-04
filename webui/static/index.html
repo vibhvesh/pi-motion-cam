@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pi Motion Cam – Dashboard</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/app.css?v=1">
+</head><body>
+<header><h1>📷 Pi Motion Cam <small>dashboard</small></h1><span id="svc" class="pill">…</span><a href="/logout" class="small">Log out</a></header>
+<nav id="tabs">
+  <button data-t="live" class="on">🎥 Live</button><button data-t="modules">🧩 Modules</button><button data-t="draw">✏️ Zones</button>
+  <button data-t="att">🧑‍💼 Attendance <b id="unkBadge" class="cnt" hidden></b></button><button data-t="events">📜 Events</button>
+  <button data-t="plates">🚗 Plates</button><button data-t="settings">⚙️ Settings</button><button data-t="system">🖥️ System</button>
+</nav>
+<main>
+<section id="t_live" class="tab"><img id="live" alt="live stream" src=""><div class="hint" id="liveInfo"></div></section>
+
+<section id="t_modules" class="tab" hidden><p class="hint">Toggle modules and edit settings. Saving writes config.yaml; the camera service hot-reloads it within ~2 s.</p><div id="modList"></div></section>
+
+<section id="t_draw" class="tab" hidden>
+  <div class="row"><select id="drawMod"></select><select id="drawKind"><option value="zone">Add zone (polygon)</option><option value="line">Set line (2 points)</option></select>
+    <input id="zoneName" type="text" placeholder="Zone name" autocomplete="off"><button id="drawSnap">📸 New snapshot</button></div>
+  <div class="hint">Tap on the image to add points. Line = 2 taps. Zone = 3+ taps then “Save”.</div>
+  <div class="stage"><img id="snap" alt="snapshot"><canvas id="drawCv"></canvas></div>
+  <div class="row"><button id="drawUndo">Undo point</button><button id="drawClear">Clear points</button><button id="drawSave" class="primary">Save</button></div>
+  <div id="geomList"></div>
+</section>
+
+<section id="t_att" class="tab" hidden>
+  <div class="card"><h3>⚠️ Unknown faces queue</h3><p class="hint">Type the person's name and press Enter (or Save). The photo moves to known_faces/&lt;name&gt;/ and the camera re-encodes faces automatically.</p>
+    <datalist id="knownNames"></datalist><div id="unkList"></div><div class="row"><button id="unkRefresh">↻ Refresh</button></div></div>
+  <div class="card"><h3>Enroll photos</h3>
+    <form id="enrollForm" class="row"><input id="enName" type="text" name="name" placeholder="Name" autocomplete="off" required>
+      <input id="enFiles" type="file" name="photos" accept="image/*" multiple required><button class="primary">Upload</button></form><div id="enRes" class="hint"></div></div>
+  <div class="card"><h3>Known people</h3><div id="people"></div></div>
+  <div class="card"><h3>Attendance log</h3><div class="row"><select id="attDate"></select><a id="attCsv" class="btn">Export CSV</a></div>
+    <div class="tablewrap"><table><thead><tr><th>Name</th><th>IN</th><th>OUT</th></tr></thead><tbody id="attBody"></tbody></table></div></div>
+</section>
+
+<section id="t_events" class="tab" hidden>
+  <div class="row"><select id="evDate"></select><select id="evMod"><option value="">All modules</option></select>
+    <select id="evSev"><option value="">Any severity</option><option>info</option><option>warning</option><option>alert</option></select>
+    <input id="evQ" type="text" placeholder="Search" autocomplete="off"><a id="evCsv" class="btn">CSV</a></div>
+  <div id="evList"></div>
+</section>
+
+<section id="t_plates" class="tab" hidden>
+  <div class="row"><select id="plDate"></select><a id="plCsv" class="btn">Export CSV</a></div>
+  <div class="card"><h3>Vehicles inside</h3><div id="plInside"></div></div>
+  <div class="card"><h3>Watchlist</h3><form id="wlForm" class="row"><input id="wl" type="text" placeholder="MH12AB1234, DL3CAB0001" autocomplete="off"><button class="primary">Save</button></form></div>
+  <div class="card"><h3>Log</h3><div class="tablewrap"><table><thead><tr><th>Plate</th><th>Dir</th><th>Time</th><th>Conf</th></tr></thead><tbody id="plBody"></tbody></table></div></div>
+</section>
+
+<section id="t_settings" class="tab" hidden>
+  <div class="card"><h3>Telegram</h3><form id="tgForm">
+    <label class="chk"><input type="checkbox" id="tgOn"> Enabled</label>
+    <label>Bot token <input id="tgTok" type="text" autocomplete="off" placeholder="123456:ABC..."></label>
+    <label>Chat id <input id="tgChat" type="text" autocomplete="off"></label>
+    <div class="row"><button class="primary">Save</button><button type="button" id="tgTest">Send test</button></div></form></div>
+  <div class="card"><h3>Camera &amp; detector</h3><p class="hint">Camera size/fps changes need “Save &amp; restart”.</p><div id="globalCfg"></div></div>
+  <div class="card"><h3>Dashboard</h3><label>Password (empty = none) <input id="webPw" type="password" autocomplete="new-password"></label>
+    <div class="row"><button id="webPwSave">Save password</button></div><p class="hint">Port changes need: sudo systemctl restart pi-motion-cam-web</p></div>
+</section>
+
+<section id="t_system" class="tab" hidden>
+  <div id="sys" class="grid"></div>
+  <div class="row"><button data-svc="start">▶ Start</button><button data-svc="stop">■ Stop</button><button data-svc="restart" class="primary">↻ Restart camera service</button></div>
+  <div class="row"><button id="logBtn">Show logs</button><select id="logN"><option>100</option><option selected>300</option><option>1000</option></select></div>
+  <pre id="logs"></pre>
+</section>
+</main>
+<div id="toasts"></div>
+<script src="/static/app.js?v=1"></script>
+</body></html>

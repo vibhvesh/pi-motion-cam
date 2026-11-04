@@ -45,6 +45,13 @@ events:
     bot_token: ""            # or env TELEGRAM_BOT_TOKEN
     chat_id: ""              # or env TELEGRAM_CHAT_ID
 
+web:                         # local dashboard (webui/, service pi-motion-cam-web): http://<pi-ip>:8080
+  port: 8080
+  password: ""               # set one if anyone else is on your Wi-Fi (or env PMC_WEB_PASSWORD)
+  live_dir: /dev/shm/pi-motion-cam   # main.py writes live.jpg + status.json here for the dashboard
+  live_fps: 5
+  live_width: 960
+
 summary:                     # daily summary JSON in summaries/ + Telegram text at send_time
   enabled: true
   send_time: "21:00"

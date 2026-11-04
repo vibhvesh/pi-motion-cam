@@ -45,3 +45,4 @@ table{width:100%;border-collapse:collapse;font-size:.78rem}td,th{border-bottom:1
 input[type=file]{display:block;margin-top:6px;width:100%;font-size:.8rem}
 footer{text-align:center;font-size:.75rem;color:#777;padding:16px}a{color:#7aa2f7}code{font-size:.85em}
 .plimg{width:110px;border-radius:3px;margin-bottom:2px}
+.unkform{flex-wrap:nowrap}.unkform input{min-width:7em;pointer-events:auto;user-select:text;-webkit-user-select:text}

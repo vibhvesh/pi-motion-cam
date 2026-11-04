@@ -52,6 +52,26 @@ Open https://vibhvesh.github.io/pi-motion-cam/ (it must be HTTPS for camera acce
 - Performance: the object detector is throttled (fast while something moves, slow when idle). Pose runs only when a pose module is on **and** a person is in view (≤ 3 people, ~4/s), and never blocks detection. Faces run at ≤ 2/s.
 - All models (TF.js, COCO-SSD, MoveNet, face-api) are served from this site. tfjs picks WebGL, then WASM, then CPU. Append `?backend=wasm` or `?backend=cpu` to the URL to force one.
 
+## Pi dashboard (local web GUI)
+
+The Pi serves its own management dashboard at **http://&lt;pi-ip&gt;:8080** (the installer prints the exact URL; `http://<hostname>.local:8080` usually works too). Open it from a phone or PC on the same Wi‑Fi/LAN.
+
+| Tab | What you can do |
+|---|---|
+| 🎥 Live | MJPEG live stream with the same overlays as snapshots (boxes, IDs, lines, zones, face names) |
+| 🧩 Modules | Turn each module on/off and edit its settings. Saving writes `config.yaml` (comments kept, `.bak` backup) and the camera service **hot-reloads** it within ~2 s; "Save & restart" restarts the service |
+| ✏️ Zones | Tap on a fresh snapshot to draw restricted zones / loitering / occupancy polygons and counter / perimeter / plate lines; delete existing ones |
+| 🧑‍💼 Attendance | **Unknown faces queue**: thumbnails from `unknown_faces/` with a name box → Enter or Save moves the photo to `known_faces/<name>/` (re-encoded automatically), or Discard. Bulk-upload enrollment photos for a name, list/delete known people, today's (or any day's) attendance log + CSV export |
+| 📜 Events | Unified event log with snapshots; filter by date, module, severity, text; CSV |
+| 🚗 Plates | Plate log, vehicles currently inside, watchlist editor, CSV |
+| ⚙️ Settings | Telegram bot token / chat id + **Send test**, camera/motion/detector settings, dashboard password |
+| 🖥️ System | CPU temperature, disk, memory, load, uptime, start/stop/restart the camera service, view its logs |
+
+- Runs as its own systemd service `pi-motion-cam-web` (so it stays up while the camera service restarts). The installer adds a narrow sudoers rule so it can only start/stop/restart `pi-motion-cam` and read its journal.
+- Password: set `web.password` in `config.yaml` (or in Settings, or env `PMC_WEB_PASSWORD`). Empty = no login; anyone on your LAN can then open it. It's plain HTTP: don't port-forward it to the internet.
+- The camera process shares frames with the dashboard via `/dev/shm/pi-motion-cam/` (`live.jpg`, `status.json`, ~5 fps, 960 px; tune `web.live_fps` / `live_width`).
+- Run it by hand: `./venv/bin/python -m webui.server [--port 8080]`.
+
 ## Raspberry Pi install
 
 ### 1. Camera
@@ -71,7 +91,9 @@ curl -sSL https://raw.githubusercontent.com/vibhvesh/pi-motion-cam/main/get.sh |
 | `--face` | `face_recognition` (dlib) for attendance | 30+ min build |
 | `--ocr` | `tesseract-ocr` + `pytesseract` for the number plate module → set `modules.plates.enabled: true` | ~30 MB |
 
-The installer clones the repo to `~/pi-motion-cam` and creates a venv (`--system-site-packages`, so apt's picamera2/OpenCV are visible).
+The installer clones the repo to `~/pi-motion-cam` and creates a venv (`--system-site-packages`, so apt's picamera2/OpenCV are visible). It installs and starts two systemd services, `pi-motion-cam` (camera) and `pi-motion-cam-web` (dashboard), and prints the dashboard URL at the end. Pass `--no-service` to skip the services.
+
+**Upgrade an existing Pi:** run the same one-liner again (it does `git pull` and then re-runs the installer with your options). Your edited `config.yaml` is kept (the new upstream one is saved as `config.yaml.upstream` so you can compare).
 
 ### 3. Configure (`config.yaml`)
 Enable modules under `modules:`. Every module accepts `enabled`, `telegram`, `cooldown_seconds` and `active_hours` (`""` = always, or `"22:00-06:00"`, which can wrap past midnight).
@@ -105,7 +127,7 @@ and sent at `summary.send_time`. To print today's summary at any time: `./venv/b
 Put clear photos in `known_faces/`, one or more per person: `alice.jpg`, `alice_1.jpg`, `alice_2.jpg` all count as *alice*. Each photo adds an encoding and matching uses the closest one, so 3–5 photos with different angles and lighting help.
 - `attendance/YYYY-MM-DD.csv` gets `name, first_seen_in, last_seen_out`. Seeing someone again within `relog_gap_minutes` extends their OUT time.
 - **Labeling unknown people:** each new unrecognized face is cropped to `unknown_faces/unknown_YYYYMMDD_HHMMSS_N.jpg`, and Telegram says *"Unknown person — please label in admin panel"*.
-  To label one, rename and move it, e.g. `mv unknown_faces/unknown_20261103_191502_1.jpg known_faces/alice_3.jpg`. `known_faces/` is re-scanned automatically, so there's no restart.
+  The easiest way to label one is the dashboard's Attendance tab: type the name and press Enter. By hand, move the file to `known_faces/alice/` (or rename it to `known_faces/alice_3.jpg`). `known_faces/` and its subfolders are re-scanned automatically, so you don't need to restart.
 
 ### 6. Output files
 | Path | Contents |
@@ -117,11 +139,12 @@ Put clear photos in `known_faces/`, one or more per person: `alice.jpg`, `alice_
 | `plates/YYYY-MM-DD.csv` | Number plates: plate, IN/OUT, time, confidence, snapshot |
 
 ### 7. Autostart service
-`install.sh` generates `pi-motion-cam.local.service` with your user and path filled in:
+`install.sh` installs and enables both services for you. To do it by hand (for example after `--no-service`):
 ```bash
 sudo cp pi-motion-cam.local.service /etc/systemd/system/pi-motion-cam.service   # add Telegram env lines if you use env vars
 sudo systemctl daemon-reload
-sudo systemctl enable --now pi-motion-cam
+sudo cp pi-motion-cam-web.local.service /etc/systemd/system/pi-motion-cam-web.service
+sudo systemctl enable --now pi-motion-cam pi-motion-cam-web
 journalctl -u pi-motion-cam -f
 ```
 
@@ -138,5 +161,7 @@ modules/counter.py      2  in/out line counter
 modules/zones.py        3 6 7 8 9 11  zone intrusion, perimeter, loitering, occupancy, animal, after-hours
 modules/behavior.py     4 5  fall, fight (experimental)
 modules/scene.py        12 13  tamper, fire/smoke (experimental)
+webui/server.py         Pi dashboard (Flask, port 8080); webui/static/ = its UI
+tests/                  Flask test-client, main.py mock-camera and Playwright tests
 docs/                   the web app (GitHub Pages): js/core.js, js/ui.js, js/modules/*.js
 ```

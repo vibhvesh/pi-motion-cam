@@ -1,0 +1,14 @@
+[Unit]
+Description=Pi Motion Cam web dashboard (port 8080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/venv/bin/python -m webui.server
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

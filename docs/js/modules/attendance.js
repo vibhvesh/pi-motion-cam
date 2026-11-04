@@ -100,7 +100,7 @@
     let best = null, bd = DEDUPE;
     for (const u of unknowns) { const d = FA.euclideanDistance(desc, u.desc); if (d < bd) { bd = d; best = u; } }
     const now = Date.now();
-    if (best) { best.lastSeen = now; best.count++; saveUnk(); return best.id; }
+    if (best) { best.lastSeen = now; best.count++; saveUnk(); const n = unkNodes.get(best.id); if (n) n.meta.textContent = `${best.id} · seen ${best.count}× · ${new Date(now).toLocaleTimeString()}`; return best.id; }
     if (unknowns.length >= UMAX) return null;
     const u = { id: 'U' + now.toString(36).slice(-5).toUpperCase(), desc: Array.from(desc), thumb: thumb(S.video, box), firstSeen: now, lastSeen: now, count: 1 };
     unknowns.push(u); saveUnk(); renderUnk();
@@ -168,30 +168,44 @@
       d.appendChild(b); el.appendChild(d);
     }
   }
+  // Unknown-face queue: keyed, incremental rendering. Each item's <form>/<input> is created ONCE and never
+  // rebuilt while it exists, so focus + typed text survive new unknowns arriving and every recognition tick
+  // (v6 wiped list.innerHTML on every new unknown, which stole focus/typed text, worst on Edge).
+  const unkNodes = new Map(), drafts = {};
   function renderUnk() {
     UI.setBadge?.(unknowns.length);
     const list = $('unkList'); if (!list) return;
-    $('unkCard').hidden = !unknowns.length; list.innerHTML = '';
-    for (const u of [...unknowns].reverse()) {
-      const c = document.createElement('div'); c.className = 'unk';
-      const im = new Image(); im.src = u.thumb; c.appendChild(im);
-      const info = document.createElement('div'); info.className = 'unkinfo';
-      const meta = document.createElement('div'); meta.className = 'hint'; meta.textContent = `${u.id} · seen ${u.count}× · ${new Date(u.lastSeen).toLocaleTimeString()}`;
-      const inp = document.createElement('input'); inp.placeholder = 'Name'; inp.setAttribute('list', 'knownNames');
-      const save = document.createElement('button'); save.className = 'primary'; save.textContent = 'Save';
-      const ign = document.createElement('button'); ign.textContent = 'Ignore';
-      save.onclick = () => label(u.id, inp.value.trim()); inp.onkeydown = e => e.key === 'Enter' && save.click();
-      ign.onclick = () => { unknowns = unknowns.filter(x => x.id !== u.id); att = att.filter(a => a.name !== 'Unknown ' + u.id); saveAtt(); saveUnk(); renderUnk(); renderAtt(); };
-      const row = document.createElement('div'); row.className = 'row'; row.append(inp, save, ign);
-      info.append(meta, row); c.appendChild(info); list.appendChild(c);
+    $('unkCard').hidden = !unknowns.length;
+    const live = new Set(unknowns.map(u => u.id));
+    for (const [id, n] of unkNodes) if (!live.has(id) || !list.contains(n.el)) { n.el.remove(); unkNodes.delete(id); }
+    for (const u of unknowns) {
+      let n = unkNodes.get(u.id);
+      if (!n) {
+        const c = document.createElement('div'); c.className = 'unk'; c.dataset.id = u.id;
+        const im = new Image(); im.src = u.thumb; im.alt = u.id; c.appendChild(im);
+        const info = document.createElement('div'); info.className = 'unkinfo';
+        const meta = document.createElement('div'); meta.className = 'hint';
+        const form = document.createElement('form'); form.className = 'row unkform'; form.autocomplete = 'off';
+        const inp = document.createElement('input'); inp.type = 'text'; inp.name = 'unk_' + u.id; inp.placeholder = 'Type name, press Enter';
+        inp.setAttribute('list', 'knownNames'); inp.autocomplete = 'off'; inp.spellcheck = false; inp.setAttribute('aria-label', 'Name for ' + u.id);
+        inp.value = drafts[u.id] || ''; inp.addEventListener('input', () => { drafts[u.id] = inp.value; });
+        const save = document.createElement('button'); save.type = 'submit'; save.className = 'primary'; save.textContent = 'Save';
+        const ign = document.createElement('button'); ign.type = 'button'; ign.textContent = 'Ignore';
+        form.addEventListener('submit', e => { e.preventDefault(); label(u.id, inp.value.trim()); });
+        ign.onclick = () => { unknowns = unknowns.filter(x => x.id !== u.id); delete drafts[u.id]; att = att.filter(a => a.name !== 'Unknown ' + u.id); saveAtt(); saveUnk(); renderUnk(); renderAtt(); };
+        form.append(inp, save, ign); info.append(meta, form); c.appendChild(info);
+        list.prepend(c);   // newest on top, existing nodes untouched
+        n = { el: c, meta, inp }; unkNodes.set(u.id, n);
+      }
+      n.meta.textContent = `${u.id} · seen ${u.count}× · ${new Date(u.lastSeen).toLocaleTimeString()}`;
     }
   }
   function label(id, name) {
-    if (!name) return alert('Enter a name');
+    if (!name) { const n = unkNodes.get(id); SC.toast('Enter a name first', 'warning'); n?.inp.focus(); return; }
     const u = unknowns.find(x => x.id === id); if (!u) return;
     faces.push({ name, desc: u.desc, thumb: u.thumb }); saveFaces();
     let n = 0; for (const a of att) if (a.name === 'Unknown ' + id) { a.name = name; n++; }
-    saveAtt(); unknowns = unknowns.filter(x => x.id !== id); saveUnk();
+    saveAtt(); unknowns = unknowns.filter(x => x.id !== id); delete drafts[id]; saveUnk();
     renderFaces(); renderUnk(); renderAtt(); SC.status(`Labeled ${id} as ${name}${n ? ` (${n} attendance row${n > 1 ? 's' : ''} updated)` : ''}`);
   }
   const fmt = t => new Date(t).toLocaleString();

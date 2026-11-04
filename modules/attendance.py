@@ -27,8 +27,9 @@ class FaceRecognizer:
         self.reload_if_changed(force=True)
 
     def _signature(self):
-        return tuple(sorted((p.name, p.stat().st_mtime) for p in self.dir.glob("*")
-                            if p.suffix.lower() in (".jpg", ".jpeg", ".png")))
+        # known_faces/alice.jpg, alice_2.jpg  or  known_faces/alice/<any>.jpg (web dashboard layout)
+        return tuple(sorted((str(p.relative_to(self.dir)), p.stat().st_mtime) for p in self.dir.rglob("*")
+                            if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".png")))
 
     def reload_if_changed(self, force=False):
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -41,7 +42,8 @@ class FaceRecognizer:
             p = self.dir / name
             e = self.fr.face_encodings(self.fr.load_image_file(str(p)))
             if e:
-                names.append(re.sub(r"[_-]\d+$", "", p.stem))  # alice.jpg / alice_2.jpg -> alice
+                sub = p.parent != self.dir
+                names.append(p.parent.name if sub else re.sub(r"[_-]\d+$", "", p.stem))  # alice/x.jpg, alice_2.jpg -> alice
                 encs.append(e[0])
             else:
                 log.warning("No face found in %s", p)

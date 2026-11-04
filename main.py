@@ -69,6 +69,38 @@ def annotate(img, dets, modules):
     return img
 
 
+class LivePublisher:
+    """Shares the annotated frame + status with the web dashboard (webui/) via files in RAM (/dev/shm)."""
+
+    def __init__(self, c):
+        self.dir = Path(c.get("live_dir", "/dev/shm/pi-motion-cam"))
+        self.width, self.iv = int(c.get("live_width", 960)), 1.0 / max(0.5, float(c.get("live_fps", 5)))
+        self.last = 0.0
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            self.dir = BASE / ".live"
+            self.dir.mkdir(exist_ok=True)
+
+    def due(self, ts):
+        return ts - self.last >= self.iv
+
+    def publish(self, img, ts, status):
+        import json
+        self.last = ts
+        h, w = img.shape[:2]
+        if w > self.width:
+            img = cv2.resize(img, (self.width, int(h * self.width / w)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        if ok:
+            tmp = self.dir / "live.jpg.tmp"
+            tmp.write_bytes(buf.tobytes())
+            os.replace(tmp, self.dir / "live.jpg")
+        tmp = self.dir / "status.json.tmp"
+        tmp.write_text(json.dumps(status, default=str))
+        os.replace(tmp, self.dir / "status.json")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--summary", action="store_true", help="print today's summary JSON and exit")
@@ -106,14 +138,62 @@ def main():
     active_iv, idle_iv = det_c.get("interval_seconds", 0.3), det_c.get("idle_interval_seconds", 2.0)
     conf_thr, night_c = det_c.get("confidence", 0.4), det_c.get("night", {})
     last_det, was_active = 0.0, False
+    live = LivePublisher(cfg.get("web", {}) or {})
+    cfg_path = BASE / "config.yaml"
+    cfg_mtime, cfg_check, started = cfg_path.stat().st_mtime, 0.0, time.time()
+    last_dets = []
+
+    def reload_config():
+        """Hot-reload: rebuild modules/event bus (and detector/pose if needed) when config.yaml changes.
+        camera.* changes need a service restart (the dashboard offers 'Save & restart')."""
+        nonlocal cfg, modules, bus, summary, det_modules, detector, pose, active_iv, idle_iv, conf_thr, night_c, motion
+        try:
+            new = load_config()
+        except Exception as e:
+            log.error("config.yaml reload failed (keeping old config): %s", e)
+            return
+        old_det = cfg.get("detector", {})
+        cfg = new
+        summary.write(modules)
+        modules = load_modules(cfg.get("modules", {}), SimpleNamespace(base=BASE, min_motion_area=cfg.get("motion", {}).get("min_area", 800)))
+        bus = EventBus(cfg.get("events", {}), BASE, cfg.get("modules", {}) or {})
+        summary = DailySummary(cfg.get("summary", {}), BASE, bus)
+        motion = MotionDetector(cfg.get("motion", {}))
+        d = cfg.get("detector", {})
+        det_modules = [m for m in modules if type(m).process is not Module.process]
+        need_det = any(m.needs_detection for m in det_modules)
+        if need_det and (detector is None or d.get("type") != old_det.get("type") or d.get("model_dir") != old_det.get("model_dir")):
+            detector = make_detector(d, BASE)
+        elif not need_det:
+            detector = None
+        if any(m.needs_pose for m in modules) and pose is None:
+            pose = make_pose(cfg.get("pose", {}), BASE)
+        active_iv, idle_iv = d.get("interval_seconds", 0.3), d.get("idle_interval_seconds", 2.0)
+        conf_thr, night_c = d.get("confidence", 0.4), d.get("night", {})
+        log.info("config.yaml reloaded: %d module(s) enabled", len(modules))
+
     log.info("Running with %d module(s); detector=%s pose=%s", len(modules),
              type(detector).__name__ if detector else None, bool(pose))
+
+    def status(ts, moved, area):
+        return {"ts": ts, "started": started, "modules": [m.name for m in modules],
+                "counts": {m.name: m.summary() for m in modules}, "motion": bool(moved), "motion_area": int(area),
+                "detector": type(detector).__name__ if detector else None, "tracks": len(tracker.tracks) if hasattr(tracker, "tracks") else None}
 
     try:
         while True:
             yuv = picam.capture_array("lores")
             gray = yuv[:lh, :lw]
             ts = time.time()
+            if ts - cfg_check > 2:
+                cfg_check = ts
+                try:
+                    mt = cfg_path.stat().st_mtime
+                except OSError:
+                    mt = cfg_mtime
+                if mt != cfg_mtime:
+                    cfg_mtime = mt
+                    reload_config()
             moved, area, mask = motion.update(gray)
             lores_events = []
             for m in modules:
@@ -121,6 +201,9 @@ def main():
             summary.tick(modules)
             interval = active_iv if (moved or was_active) else idle_iv
             if ts - last_det < interval:
+                if live.due(ts):
+                    frame = np.ascontiguousarray(picam.capture_array("main"))
+                    live.publish(annotate(frame, last_dets, modules), ts, status(ts, moved, area))
                 if lores_events:
                     frame = np.ascontiguousarray(picam.capture_array("main"))
                     bus.emit(lores_events, annotate(frame, [], modules))
@@ -133,6 +216,7 @@ def main():
             dets = detector.detect(det_img, thr) if detector else []
             tracks = tracker.update(dets, ts, frame.shape[1])
             was_active = bool(dets)
+            last_dets = dets
             if pose:
                 for t in sorted((t for t in tracks.values() if t.cls == "person"), key=lambda t: -t.box[2] * t.box[3])[:pose.max_people]:
                     t.pose = pose.estimate(frame, t.box)
@@ -145,8 +229,12 @@ def main():
                     events += m.process(f)
                 except Exception:
                     log.exception("Module %s crashed on a frame", m.name)
-            if events:
-                bus.emit(events, annotate(frame.copy(), dets, modules))
+            if events or live.due(ts):
+                shown = annotate(frame.copy(), dets, modules)
+                if events:
+                    bus.emit(events, shown)
+                if live.due(ts):
+                    live.publish(shown, ts, status(ts, moved, area))
             if moved and events:
                 motion.prev = None
     except KeyboardInterrupt:
