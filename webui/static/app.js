@@ -194,6 +194,35 @@ $('tgForm').onsubmit = async e => { e.preventDefault(); try { await saveCfg('eve
 $('tgTest').onclick = async () => { try { await api('/api/telegram/test', { method: 'POST' }); toast('Test message sent ✅'); } catch (e) { toast('Telegram: ' + e.message, 1); } };
 $('webPwSave').onclick = async () => { try { await saveCfg('web', { password: $('webPw').value }); toast('Password saved'); } catch (e) { toast(e.message, 1); } };
 
+// ---- test with file ----
+let testId = null, testTimer = null;
+async function runTest(fd) {
+  $('tRes').innerHTML = ''; $('tProg').textContent = 'Uploading…';
+  try {
+    const j = await api('/api/test', { method: 'POST', body: fd }); testId = j.id;
+    $('tLive').hidden = false; $('tLive').src = `/api/test/${j.id}/stream.mjpg`; $('tStop').hidden = false; $('tRun').disabled = true;
+    clearInterval(testTimer); testTimer = setInterval(pollTest, 1000);
+  } catch (e) { $('tProg').textContent = '❌ ' + e.message; }
+}
+async function pollTest() {
+  const s = await api('/api/test/' + testId).catch(() => null); if (!s) return;
+  const p = s.progress; $('tProg').textContent = `${esc(s.name)} · ` + (p ? `${p.kind} frame ${p.frame}${p.total ? '/' + p.total : ''} · ${p.video_time}s` : 'starting…') + (s.running ? ' · running' : ' · finished');
+  $('tLog').textContent = s.log;
+  if (s.running) return;
+  clearInterval(testTimer); $('tStop').hidden = true; $('tRun').disabled = false; $('tLive').src = `/api/test/${testId}/last.jpg?t=${Date.now()}`;
+  if (!s.result) { $('tRes').innerHTML = '<p class="hint">❌ Test failed — see the process log.</p>'; return; }
+  const r = s.result, sum = Object.entries(r.summary || {}).map(([m, o]) => `<span class="pill">${esc(m)}: ${esc(Object.entries(o).map(([k, v]) => `${k} ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', '))}</span>`).join(' ');
+  $('tRes').innerHTML = `<h3>Result: ${r.events.length} event(s)</h3><p>${sum || '<span class="hint">No module counts.</span>'}</p>
+    ${r.modules.length ? '' : '<p class="hint">No modules are enabled in config.yaml — enable some in 🧩 Modules first.</p>'}` +
+    r.events.slice().reverse().map(e => `<div class="ev ${esc(e.severity)}">${e.snapshot ? `<a href="/api/test/${testId}/captures/${encodeURIComponent(e.snapshot)}" target="_blank"><img src="/api/test/${testId}/captures/${encodeURIComponent(e.snapshot)}" alt=""></a>` : ''}
+      <div><b>${esc(e.module)}</b> · ${esc(e.type)} · <span class="hint">${esc(e.timestamp)} · source=${esc(e.source)}</span><br>${esc(e.message)}</div></div>`).join('');
+}
+$('testForm').onsubmit = e => { e.preventDefault(); runTest(new FormData(e.target)); };
+$('tStop').onclick = () => testId && api(`/api/test/${testId}/stop`, { method: 'POST' });
+const tDrop = $('tDrop');
+tDrop.ondragover = e => { e.preventDefault(); tDrop.style.background = '#1d2a3a'; }; tDrop.ondragleave = () => { tDrop.style.background = ''; };
+tDrop.ondrop = e => { e.preventDefault(); tDrop.style.background = ''; const f = e.dataTransfer.files[0]; if (!f) return; const fd = new FormData($('testForm')); fd.set('file', f); runTest(fd); };
+
 // ---- system ----
 const fmtB = b => (b / 1e9).toFixed(1) + ' GB', fmtUp = s => s == null ? '?' : `${Math.floor(s / 86400)}d ${Math.floor(s % 86400 / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
 async function loadStatus() {

@@ -1,6 +1,6 @@
 # Pi Motion Cam: Standard Operating Procedure (SOP) & Best Practices
 
-Applies to: the Raspberry Pi 5 camera service (`main.py` + `modules/`), the Pi dashboard (`webui/`, port 8080), and the browser web app v7 (https://vibhvesh.github.io/pi-motion-cam/).
+Applies to: the Raspberry Pi 5 camera service (`main.py` + `modules/`), the Pi dashboard (`webui/`, port 8080), and the browser web app v8 (https://vibhvesh.github.io/pi-motion-cam/).
 Everything here is based on the code and `config.yaml` in this repo. Setting names are written exactly as they appear in `config.yaml`.
 
 ---
@@ -78,6 +78,21 @@ Open `http://<pi-ip>:8080` from a phone or PC on the same network.
    - Camera size or fps changes need **Save & restart**.
 6. **Set schedules:** every module accepts `active_hours` (`""` means always; for example `"20:00-06:00"`, which can wrap past midnight), plus `cooldown_seconds` and `telegram: true/false`.
 7. **Daily summary:** `summary.enabled` and `summary.send_time` (default `21:00`) control the daily Telegram summary.
+
+## 5a. Testing settings with a file (before going live, and after every tuning change)
+Use recorded clips from the **actual camera position** so a setting change can be checked without waiting for a real event.
+1. **Pi dashboard:** go to 🧪 Test file, pick a clip (≤ 200 MB, jpg/png/mp4/avi/mov/mkv/webm) and press ▶ Run test. You can tick *Send Telegram alerts*, which is off by default.
+   - The test runs in a separate low-priority process, and the live camera keeps recording.
+   - It uses the modules and settings currently in `config.yaml`, and the real `known_faces/`.
+   - Results are written to a temp folder (`/tmp/pi-motion-cam-tests/`, last 5 runs kept). They never go into the real `events/`, `attendance/` or `plates/` logs.
+2. **Web app:** press 📁 Test with file, or drop a file on the video.
+   - For still images, set *Repeat frames* (default 10) so tracking and hold timers can trigger.
+   - Events are tagged `source=file:<name>`. Clear them afterwards in Events → Clear if you don't want them mixed with live events.
+3. Check that the expected events fire (and no false ones). Adjust settings and re-run the same clip until you're happy, then watch the live result for a day.
+4. **Keep a small library of test clips:** a person entering, a crowd, a vehicle at the gate, an empty scene at night. Re-test after every upgrade.
+5. Time-based settings use the **file's own time** on the Pi (frame number ÷ fps). `active_hours` is ignored during tests.
+6. Test clips contain personal data. Delete them when you're done, and never use footage of people who haven't been informed (§11).
+7. There is no helmet/vest (PPE) module, so PPE can't be tested.
 
 ## 6. Enrollment SOP (attendance)
 **Photo quality**
@@ -215,8 +230,11 @@ General rules:
 | 🎥 Live shows "Camera service not running" / no stream | Header shows the service state. In 🖥️ System press Restart, or run `sudo systemctl restart pi-motion-cam`. Then check the logs (System → Show logs, or `journalctl -u pi-motion-cam -f`). Test the camera with `rpicam-hello`. Only one program can use the camera at a time. |
 | Service keeps restarting | The logs usually show a YAML error in `config.yaml` (restore `config.yaml.bak`) or a missing optional package (for example *"Module attendance needs an optional package"*: re-run the installer with `--face`). |
 | Attendance module won't start on the Pi | `face_recognition` isn't installed: run `./install.sh --face`. |
-| Web app: face models fail to load | Click **Retry loading face models**, check the connection, then hard-refresh (Ctrl+F5) or clear the site cache. Make sure the header shows **v7**. |
-| Web app: can't type a name in the unknown queue (Edge) | Fixed in v7. Hard-refresh until the header says v7. |
+| Web app: face models fail to load | Click **Retry loading face models**, check the connection, then hard-refresh (Ctrl+F5) or clear the site cache. Make sure the header shows **v8**. |
+| Web app: can't type a name in the unknown queue (Edge) | Fixed in v7. Hard-refresh until the header says v8 (current). |
+| Test file: "cannot decode" | Browser: use mp4 (H.264) or webm; mov only works where the browser supports its codec. Pi: OpenCV/FFmpeg must support the codec; convert it with `ffmpeg -i in.mov out.mp4`. |
+| Test file finishes with 0 events | No modules enabled, or a still image (no motion: use more *Repeat frames* and occupancy/zone modules). Check the process log in 🧪 Test file. |
+| Test file: "A test is already running" | Only one Pi test runs at a time. Wait, or press ■ Stop. |
 | Web app camera doesn't start | Must be HTTPS (the GitHub Pages URL); allow camera permission. |
 | High CPU / temperature / slow | Lower `web.live_fps` (default 5) or `web.live_width`, raise `detector.idle_interval_seconds`, disable unused modules, turn off pose, and improve cooling. Close the 🎥 Live tab when not needed (the stream only runs while open). |
 | Too many Telegram messages | Raise `cooldown_seconds` or set `telegram: false` per module; use `active_hours`. |

@@ -46,3 +46,8 @@ input[type=file]{display:block;margin-top:6px;width:100%;font-size:.8rem}
 footer{text-align:center;font-size:.75rem;color:#777;padding:16px}a{color:#7aa2f7}code{font-size:.85em}
 .plimg{width:110px;border-radius:3px;margin-bottom:2px}
 .unkform{flex-wrap:nowrap}.unkform input{min-width:7em;pointer-events:auto;user-select:text;-webkit-user-select:text}
+#fileCanvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+#dropHint{position:absolute;inset:0;display:grid;place-items:center;background:rgba(122,162,247,.35);color:#fff;font-size:1.2rem;z-index:3;pointer-events:none}
+.filepanel{background:#0f1419;border:1px dashed #7aa2f7;border-radius:8px;padding:8px;margin-top:6px}#vidSeek{flex:1}.res{display:flex;flex-wrap:wrap;gap:6px}.res span{background:#161d26;border-radius:6px;padding:4px 8px}
+.evsrc{color:#7aa2f7;font-size:.75rem}
+label.inl{display:inline-block;margin:0}

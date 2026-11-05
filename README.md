@@ -54,6 +54,15 @@ Open https://vibhvesh.github.io/pi-motion-cam/ (it must be HTTPS for camera acce
 - Performance: the object detector is throttled (fast while something moves, slow when idle). Pose runs only when a pose module is on **and** a person is in view (≤ 3 people, ~4/s), and never blocks detection. Faces run at ≤ 2/s.
 - All models (TF.js, COCO-SSD, MoveNet, face-api) are served from this site. tfjs picks WebGL, then WASM, then CPU. Append `?backend=wasm` or `?backend=cpu` to the URL to force one.
 
+### Test with a photo or video (web app v8)
+Click **📁 Test with file** under the video, or drag and drop a file onto the video area.
+- **Images:** run through all enabled modules. *Repeat frames* (default 10) feeds the same frame several times, so tracking, hold timers and occupancy can trigger.
+- **Videos** (mp4, webm, and mov where the browser can decode it): play through exactly the same per-frame pipeline as the camera. You get play/pause, seek and 0.25–2× speed.
+- You get the same overlays and toasts as live, plus a result panel with objects, counts per module and the events triggered.
+- Events are tagged `source=file:<name>` in the Events tab and CSV.
+- Telegram is **off** for test files unless you tick *Send Telegram alerts for test files*.
+- **📷 Back to camera** returns to the live camera.
+
 ## Pi dashboard (local web GUI)
 
 The Pi serves its own management dashboard at **http://&lt;pi-ip&gt;:8080** (the installer prints the exact URL; `http://<hostname>.local:8080` usually works too). Open it from a phone or PC on the same Wi‑Fi/LAN.
@@ -66,6 +75,7 @@ The Pi serves its own management dashboard at **http://&lt;pi-ip&gt;:8080** (the
 | 🧑‍💼 Attendance | **Unknown faces queue**: thumbnails from `unknown_faces/` with a name box → Enter or Save moves the photo to `known_faces/<name>/` (re-encoded automatically), or Discard. Bulk-upload enrollment photos for a name, list/delete known people, today's (or any day's) attendance log + CSV export |
 | 📜 Events | Unified event log with snapshots; filter by date, module, severity, text; CSV |
 | 🚗 Plates | Plate log, vehicles currently inside, watchlist editor, CSV |
+| 🧪 Test file | Upload an image or video (jpg/png/mp4/avi/mov/mkv/webm, ≤ 200 MB). It runs through the same `main.py` pipeline (`--source`, `modules/filesource.py` replaces picamera2) in a separate `nice`/`ionice` low-priority process. The live camera keeps running. You see an annotated MJPEG progress view, a result summary, events and annotated snapshots. Outputs go to a temp folder (the last 5 runs are kept), never to your real logs. Telegram is optional and off by default |
 | ⚙️ Settings | Telegram bot token / chat id + **Send test**, camera/motion/detector settings, dashboard password |
 | 🖥️ System | CPU temperature, disk, memory, load, uptime, start/stop/restart the camera service, view its logs |
 
@@ -73,6 +83,8 @@ The Pi serves its own management dashboard at **http://&lt;pi-ip&gt;:8080** (the
 - Password: set `web.password` in `config.yaml` (or in Settings, or env `PMC_WEB_PASSWORD`). Empty = no login; anyone on your LAN can then open it. It's plain HTTP: don't port-forward it to the internet.
 - The camera process shares frames with the dashboard via `/dev/shm/pi-motion-cam/` (`live.jpg`, `status.json`, ~5 fps, 960 px; tune `web.live_fps` / `live_width`).
 - Run it by hand: `./venv/bin/python -m webui.server [--port 8080]`.
+- Offline file test from the shell: `./venv/bin/python main.py --source clip.mp4 --out /tmp/test1 [--frames 10] [--telegram]`. This writes `result.json`, plus `events/`, `captures/` and so on under `--out`.
+- There is no helmet/vest (PPE) module, so file tests can't check for PPE either.
 
 ## Raspberry Pi install
 
@@ -164,6 +176,7 @@ modules/zones.py        3 6 7 8 9 11  zone intrusion, perimeter, loitering, occu
 modules/behavior.py     4 5  fall, fight (experimental)
 modules/scene.py        12 13  tamper, fire/smoke (experimental)
 webui/server.py         Pi dashboard (Flask, port 8080); webui/static/ = its UI
+modules/filesource.py   FileSource: image/video replacing picamera2 for --source tests
 tests/                  Flask test-client, main.py mock-camera and Playwright tests
 docs/                   the web app (GitHub Pages): js/core.js, js/ui.js, js/modules/*.js
 ```

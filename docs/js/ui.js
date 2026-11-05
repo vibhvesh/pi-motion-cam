@@ -81,7 +81,7 @@
   }
   function evRow(e, withModule = true) {
     const m = modules.find(x => x.id === e.module);
-    return `<div class="ev ${e.sev}">${e.thumb ? `<img src="${e.thumb}" loading="lazy">` : '<div class="noimg"></div>'}<div><div class="evt">${new Date(e.t).toLocaleTimeString()}${withModule ? ` · ${m ? m.icon + ' ' + esc(m.name) : esc(e.module)}` : ''} · ${esc(e.type)}</div><div>${esc(e.msg)}</div></div></div>`;
+    return `<div class="ev ${e.sev}">${e.thumb ? `<img src="${e.thumb}" loading="lazy">` : '<div class="noimg"></div>'}<div><div class="evt">${new Date(e.t).toLocaleTimeString()}${withModule ? ` · ${m ? m.icon + ' ' + esc(m.name) : esc(e.module)}` : ''} · ${esc(e.type)}</div><div>${esc(e.msg)}</div>${e.src && e.src !== 'camera' ? `<div class="evsrc">source=${esc(e.src)}</div>` : ''}</div></div>`;
   }
   function renderModLog(m) { const el = $('ml_' + m.id); if (el) el.innerHTML = S.events.filter(e => e.module === m.id).slice(-5).reverse().map(e => evRow(e, false)).join('') || '<span class="hint">No events yet.</span>'; }
   UI.onEvent = (e, m) => { renderModLog(m); renderStats(m); $('evCount').textContent = S.events.length; if (!$('tabEvents').hidden) renderEvents(); };
@@ -95,7 +95,7 @@
   $('evFilter').onchange = renderEvents;
   $('evCsv').onclick = () => {
     const q = s => `"${String(s ?? '').replace(/"/g, '""')}"`;
-    UI.download(`events_${new Date().toISOString().slice(0, 10)}.csv`, 'time,module,type,severity,message,track_id\n' + S.events.map(e => [new Date(e.t).toISOString(), e.module, e.type, e.sev, e.msg, e.track].map(q).join(',')).join('\n'), 'text/csv');
+    UI.download(`events_${new Date().toISOString().slice(0, 10)}.csv`, 'time,module,type,severity,message,track_id,source\n' + S.events.map(e => [new Date(e.t).toISOString(), e.module, e.type, e.sev, e.msg, e.track, e.src || 'camera'].map(q).join(',')).join('\n'), 'text/csv');
   };
   $('evClear').onclick = () => { if (confirm('Clear the event log?')) { S.events = []; SC.saveEvents(); renderEvents(); modules.forEach(renderModLog); $('evCount').textContent = 0; } };
 
@@ -224,4 +224,38 @@ ${common(ah)}
   $('snapBtn').onclick = () => { const m = modules.find(x => x.id === 'motion'); m.emit('manual', 'Manual snapshot', {}); };
   $('unkBadge').onclick = () => { document.querySelector('[data-tab=tabModules]').click(); const c = $('mod_attendance'); c.open = true; c.scrollIntoView({ behavior: 'smooth' }); };
   UI.setBadge(modules.find(m => m.id === 'attendance')?.unknownCount?.() || 0);
+
+  // ---------- test with file ----------
+  const vid = $('video'), fmtV = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+  let testFile = null;
+  async function runFile(f) {
+    if (!f) return;
+    if (!/^(image|video)\//.test(f.type) && !/\.(mp4|webm|mov|m4v|ogv|jpe?g|png|webp|gif|bmp)$/i.test(f.name)) return SC.toast('Choose an image or video file', 'warning');
+    testFile = f; const isVid = f.type.startsWith('video/') || /\.(mp4|webm|mov|m4v|ogv)$/i.test(f.name);
+    $('filePanel').hidden = false; $('fileName').textContent = (isVid ? '🎞️ ' : '🖼️ ') + f.name; $('vidCtl').hidden = !isVid; $('imgCtl').hidden = isVid;
+    $('fileResults').innerHTML = '<p class="hint">Running…</p>'; $('vidPlay').textContent = '⏸ Pause';
+    try { await SC.startFile(f, { frames: +$('imgFrames').value || 10, speed: +$('vidSpeed').value }); }
+    catch (e) { $('fileResults').innerHTML = `<p class="err">${esc(e.message)}</p>`; SC.toast(e.message, 'alert'); }
+  }
+  $('testFile').onchange = e => { runFile(e.target.files[0]); e.target.value = ''; };
+  const stage = $('stage');
+  stage.addEventListener('dragover', e => { e.preventDefault(); $('dropHint').hidden = false; });
+  stage.addEventListener('dragleave', () => { $('dropHint').hidden = true; });
+  stage.addEventListener('drop', e => { e.preventDefault(); $('dropHint').hidden = true; runFile(e.dataTransfer.files[0]); });
+  $('fileBack').onclick = () => { SC.stopFile(); $('filePanel').hidden = true; testFile = null; };
+  $('imgRerun').onclick = () => runFile(testFile);
+  $('vidPlay').onclick = () => { if (vid.paused) { if (!S.running) runFile(testFile); else vid.play(); $('vidPlay').textContent = '⏸ Pause'; } else { vid.pause(); $('vidPlay').textContent = '▶ Play'; } };
+  $('vidSpeed').onchange = () => { vid.playbackRate = +$('vidSpeed').value; };
+  $('vidSeek').oninput = () => { if (vid.duration) { vid.currentTime = vid.duration * $('vidSeek').value / 1000; S.prevGray = null; } };
+  vid.addEventListener('timeupdate', () => { if (S.source === 'camera' || !vid.duration) return; if (document.activeElement !== $('vidSeek')) $('vidSeek').value = Math.round(vid.currentTime / vid.duration * 1000); $('vidTime').textContent = `${fmtV(vid.currentTime)} / ${fmtV(vid.duration)}`; });
+  $('testTg').checked = !!G.testTelegram; $('testTg').onchange = e => { G.testTelegram = e.target.checked; SC.saveG(); };
+  UI.onFileState = (st, res) => {
+    if (st !== 'done') return;
+    if (S.file?.type === 'video') $('vidPlay').textContent = '▶ Play again';
+    const c = Object.entries(res.counts).map(([m, o]) => { const mm = modules.find(x => x.id === m); return Object.entries(o).map(([k, v]) => `<span>${mm ? mm.icon : ''} ${esc(m)} · ${esc(k)}: <b>${v}</b></span>`).join(''); }).join('');
+    $('fileResults').innerHTML = `<h4>Result: ${res.events.length} event(s)</h4>
+      <div class="res"><span>Objects in last frame: <b>${esc(res.objects.join(', ') || 'none')}</b></span>${c}</div>
+      ${modules.some(m => m.cfg.enabled) ? '' : '<p class="err">No modules are enabled — switch some on in the Modules tab, then run again.</p>'}
+      <div class="mlog">${res.events.slice().reverse().map(e => evRow(e)).join('') || '<p class="hint">No events triggered.</p>'}</div>`;
+  };
 })();

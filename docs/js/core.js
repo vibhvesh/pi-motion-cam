@@ -1,7 +1,7 @@
 /* Pi Motion Cam web — core: camera, detection, tracking, pose, event bus, Telegram, module registry. */
 'use strict';
 const SC = (() => {
-  const VERSION = '7';
+  const VERSION = '8';
   const $ = id => document.getElementById(id);
   const LS = {
     get: (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } },
@@ -31,6 +31,7 @@ const SC = (() => {
     motionPct: 0, motionBox: null, dets: [], tracks: new Map(), nextId: 1,
     coco: null, poseDet: null, poseLoading: null, backend: null, detBusy: false, poseBusy: false, lastDet: 0, lastPose: 0,
     dark: false, brightness: 128, fps: 0, frames: 0, fpsT: 0, edit: null, events: LS.get('sc_events', []), lastSent: {},
+    source: 'camera', file: null, fileImg: null, fileTicks: 0, fileTarget: 0, fileUrl: null, fileStart: null,
   };
   const modules = [];
   const status = t => { $('status').textContent = t; $('status').title = t; };
@@ -179,9 +180,14 @@ const SC = (() => {
     fastFrame();
     for (const m of modules) if (m.cfg.enabled && m.onFast) { try { m.onFast(S, now); } catch (e) { console.error(m.id, e); } }
     const active = moving() || S.tracks.size > 0;
-    if (S.coco && !S.detBusy && now - S.lastDet > (active ? G.detFast : G.detIdle)) { S.lastDet = now; detectTick(now); }
+    const iv = S.source === 'camera' ? (active ? G.detFast : G.detIdle) : G.detFast;   // file test: always fast rate
+    if (S.coco && !S.detBusy && now - S.lastDet > iv) {
+      S.lastDet = now;
+      if (S.fileImg) { S.fileTicks++; detectTick(now).then(() => { if (S.fileImg && S.fileTicks >= S.fileTarget) finishFile(); }); }
+      else detectTick(now);
+    }
     draw();
-    $('liveStats').textContent = `${S.fps} fps · motion ${S.motionPct.toFixed(1)}% · ${S.dets.length} obj · ${S.backend || ''}${S.dark ? ' · 🌙 night' : ''}`;
+    $('liveStats').textContent = (S.source !== 'camera' ? `🧪 ${S.source}${S.fileImg ? ` · frame ${S.fileTicks}/${S.fileTarget}` : ''} · ` : '') + `${S.fps} fps · motion ${S.motionPct.toFixed(1)}% · ${S.dets.length} obj · ${S.backend || ''}${S.dark ? ' · 🌙 night' : ''}`;
     requestAnimationFrame(loop);
   }
 
@@ -250,14 +256,14 @@ const SC = (() => {
   }
   function emit(m, type, msg, opt = {}) {
     const snap = opt.canvas || snapshot();
-    const ev = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), t: Date.now(), module: m.id, type, msg, sev: opt.severity || 'info', track: opt.trackId ?? null, thumb: snap ? thumbOf(snap) : null };
+    const ev = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), t: Date.now(), module: m.id, type, msg, sev: opt.severity || 'info', track: opt.trackId ?? null, src: S.source, thumb: snap ? thumbOf(snap) : null };
     S.events.push(ev); saveEvents();
     m.counts[type] = (m.counts[type] || 0) + 1; saveCounts(m);
     toast(`${m.icon} ${msg}`, ev.sev);
     if (ev.sev === 'alert') { if (G.sound) beep(); navigator.vibrate?.(200); }
     UI.onEvent?.(ev, m);
     const key = m.id + ':' + type, cd = (m.cfg.cooldown ?? 30) * 1000;
-    if (m.cfg.telegram && G.tgToken && G.tgChat && Date.now() - (S.lastSent[key] || 0) >= cd) {
+    if (m.cfg.telegram && (S.source === 'camera' || G.testTelegram) && G.tgToken && G.tgChat && Date.now() - (S.lastSent[key] || 0) >= cd) {
       S.lastSent[key] = Date.now();
       const cap = `${m.icon} [${m.name}] ${msg}\n${new Date().toLocaleString()}`;
       if (snap) snap.toBlob(b => telegram(cap, b), 'image/jpeg', 0.85); else telegram(cap);
@@ -296,29 +302,84 @@ const SC = (() => {
   function resetCounts(m) { m.counts = {}; saveCounts(m); m.reset?.(); }
 
   // ---------- camera ----------
-  async function start() {
-    if (!window.isSecureContext) { alert('Camera needs HTTPS'); return; }
-    try {
-      S.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: G.facing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-    } catch (e) { status('Camera error: ' + e.message); alert('Camera error: ' + e.message); return; }
-    S.video.srcObject = S.stream; await S.video.play();
+  // Shared setup for any source (camera stream, video file, still image). S.video must expose videoWidth/videoHeight.
+  function beginSource() {
     const vw = S.video.videoWidth, vh = S.video.videoHeight, sc = Math.min(1, 960 / vw);
     S.overlay.width = Math.round(vw * sc); S.overlay.height = Math.round(vh * sc);  // overlay space (<=960px wide) for drawing & geometry
     S.vx = vw / S.overlay.width; S.vy = vh / S.overlay.height;                     // overlay -> video pixel scale
     S.SH = Math.round(S.SW * vh / vw); S.small.width = S.SW; S.small.height = S.SH; S.prevGray = null;
+    S.tracks.clear(); S.dets = []; S.lastDet = 0;
     S.running = true; UI.onRunning?.(true);
     loop();
+  }
+  async function loadModels() {
     if (!S.coco) {
       try { await initBackend(); status('Loading object detector (' + S.backend + ')…'); S.coco = await cocoSsd.load({ base: 'lite_mobilenet_v2', modelUrl: PATHS.coco }); }
-      catch (e) { status('Detector failed: ' + e.message); return; }
+      catch (e) { status('Detector failed: ' + e.message); return false; }
     }
     if (modules.some(m => m.cfg.enabled && m.needsPose)) loadPose();
-    status('Running · ' + S.backend);
+    return true;
+  }
+  async function start() {
+    if (!window.isSecureContext) { alert('Camera needs HTTPS'); return; }
+    if (S.running) stop();
+    useVideoEl(); S.source = 'camera';
+    try {
+      S.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: G.facing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    } catch (e) { status('Camera error: ' + e.message); alert('Camera error: ' + e.message); return; }
+    S.video.srcObject = S.stream; await S.video.play();
+    beginSource();
+    if (await loadModels()) status('Running · ' + S.backend);
   }
   function stop() {
     S.running = false; S.stream?.getTracks().forEach(t => t.stop()); S.stream = null; S.dets = []; S.tracks.clear();
+    if (S.source !== 'camera') { const v = $('video'); v.pause(); }
     S.octx?.clearRect(0, 0, S.W, S.H); UI.onRunning?.(false); status('Stopped');
   }
+
+  // ---------- test with a file (image or video) through the exact same pipeline ----------
+  function useVideoEl() {
+    S.video = $('video'); S.video.hidden = false; $('fileCanvas').hidden = true; S.fileImg = null;
+    if (S.fileUrl) { URL.revokeObjectURL(S.fileUrl); S.fileUrl = null; }
+    S.video.removeAttribute('src'); S.video.srcObject = null; S.video.loop = false; S.video.onended = null;
+  }
+  function countsNow() { const o = {}; for (const m of modules) o[m.id] = { ...m.counts }; return o; }
+  async function startFile(file, opt = {}) {
+    if (S.running) stop();
+    useVideoEl();
+    const url = URL.createObjectURL(file), isVideo = file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v|ogv)$/i.test(file.name);
+    S.fileUrl = url; S.file = { name: file.name, type: isVideo ? 'video' : 'image', size: file.size };
+    S.source = 'file:' + file.name; S.fileStart = { t: Date.now(), counts: countsNow(), events: S.events.length };
+    status('Loading models…'); if (!(await loadModels())) return false;
+    if (isVideo) {
+      const v = S.video; v.muted = true; v.playsInline = true; v.src = url; v.playbackRate = opt.speed || 1;
+      await new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error('This browser cannot decode this video (try mp4/H.264 or webm)')); });
+      v.onended = () => finishFile();
+      beginSource(); await v.play().catch(() => {});
+    } else {
+      const im = new Image(); im.src = url;
+      await im.decode().catch(() => { throw new Error('Cannot decode this image'); });
+      const c = $('fileCanvas'), sc = Math.min(1, 1920 / Math.max(im.naturalWidth, im.naturalHeight));
+      c.width = Math.round(im.naturalWidth * sc); c.height = Math.round(im.naturalHeight * sc); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+      Object.defineProperty(c, 'videoWidth', { configurable: true, get: () => c.width });
+      Object.defineProperty(c, 'videoHeight', { configurable: true, get: () => c.height });
+      $('video').hidden = true; c.hidden = false; S.video = c; S.fileImg = im; S.fileTicks = 0; S.fileTarget = Math.max(1, Math.min(100, opt.frames || 10));
+      beginSource();
+    }
+    status(`Testing ${file.name} · ${S.backend}`); UI.onFileState?.('running');
+    return true;
+  }
+  function finishFile() {
+    if (S.source === 'camera' || !S.fileStart) return;
+    const before = S.fileStart.counts, diff = {};
+    for (const m of modules) for (const [k, v] of Object.entries(m.counts)) { const d = v - (before[m.id]?.[k] || 0); if (d > 0) (diff[m.id] ||= {})[k] = d; }
+    const evs = S.events.slice(S.fileStart.events).filter(e => e.src === S.source);
+    const res = { source: S.source, file: S.file, events: evs, counts: diff, objects: [...new Set(S.dets.map(d => d.cls))], tracks: S.nextId };
+    if (S.fileImg) { S.running = false; draw(); UI.onRunning?.(false); }   // keep the final overlay on screen
+    status(`Test finished · ${evs.length} event(s)`); UI.onFileState?.('done', res);
+    S.lastResult = res; return res;
+  }
+  function stopFile() { stop(); useVideoEl(); S.source = 'camera'; S.file = null; UI.onFileState?.('idle'); status('Idle'); }
   async function switchCamera() { G.facing = G.facing === 'user' ? 'environment' : 'user'; saveG(); if (S.running) { stop(); await start(); } }
 
   function init() {
@@ -334,6 +395,6 @@ const SC = (() => {
   }
 
   return { VERSION, $, LS, esc, G, saveG, S, PATHS, ANIMALS, VEHICLES, geo, torsoAngle, modules, register, resetCounts, emit, telegram, toast, status,
-    start, stop, switchCamera, init, startEdit, drawPoly, snapshot, saveEvents, initBackend, loadPose, moving };
+    start, stop, switchCamera, init, startFile, finishFile, stopFile, startEdit, drawPoly, snapshot, saveEvents, initBackend, loadPose, moving };
 })();
 const UI = {};

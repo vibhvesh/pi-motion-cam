@@ -3,7 +3,7 @@ import os, shutil, sys, tempfile, threading, time
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 tmp = Path(tempfile.mkdtemp()); shutil.copy(ROOT / "config.yaml", tmp / "config.yaml")
-os.environ["PMC_BASE"] = str(tmp); sys.path.insert(0, str(ROOT))
+os.environ["PMC_BASE"] = str(tmp); os.environ["PMC_TEST_DIR"] = str(tmp / "tests"); sys.path.insert(0, str(ROOT))
 import cv2, numpy as np
 from werkzeug.serving import make_server
 from webui import server as S
@@ -29,7 +29,10 @@ with sync_playwright() as p:
     pg.wait_for_function("document.querySelectorAll('#unkList .unk').length === 2"); assert (tmp / "known_faces/Arjun").exists()
     pg.wait_for_selector("text=Arjun · 1 photo(s)")
     for t in ["Live", "Modules", "Zones", "Events", "Plates", "Settings", "System"]: pg.click(f"#tabs >> text={t}"); time.sleep(0.4)
-    pg.click("#tabs >> text=Modules"); pg.wait_for_selector("#modList details"); pg.screenshot(path=str(tmp / "mods.png"))
+    pg.click("#tabs >> text=Modules"); pg.wait_for_selector("#modList details")
+    # 🧪 Test file tab: upload a sample image, wait for the result panel
+    pg.click("#tabs >> text=Test file"); pg.set_input_files("#tFile", str(ROOT / "tests/samples/people.jpg")); pg.click("#tRun")
+    pg.wait_for_selector("#tRes h3", timeout=60000); print("dashboard test-file:", pg.inner_text("#tRes h3"), "|", pg.inner_text("#tProg")); pg.screenshot(path=str(tmp / "mods.png"))
     b.close()
 assert not errs, errs
 print("dashboard browser test PASS")

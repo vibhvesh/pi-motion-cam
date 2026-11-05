@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pi Motion Cam – Dashboard</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/app.css?v=1">
+<title>Pi Motion Cam – Dashboard</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/app.css?v=2">
 </head><body>
 <header><h1>📷 Pi Motion Cam <small>dashboard</small></h1><span id="svc" class="pill">…</span><a href="/logout" class="small">Log out</a></header>
 <nav id="tabs">
   <button data-t="live" class="on">🎥 Live</button><button data-t="modules">🧩 Modules</button><button data-t="draw">✏️ Zones</button>
   <button data-t="att">🧑‍💼 Attendance <b id="unkBadge" class="cnt" hidden></b></button><button data-t="events">📜 Events</button>
-  <button data-t="plates">🚗 Plates</button><button data-t="settings">⚙️ Settings</button><button data-t="system">🖥️ System</button>
+  <button data-t="plates">🚗 Plates</button><button data-t="test">🧪 Test file</button><button data-t="settings">⚙️ Settings</button><button data-t="system">🖥️ System</button>
 </nav>
 <main>
 <section id="t_live" class="tab"><img id="live" alt="live stream" src=""><div class="hint" id="liveInfo"></div></section>
@@ -47,6 +47,18 @@
   <div class="card"><h3>Log</h3><div class="tablewrap"><table><thead><tr><th>Plate</th><th>Dir</th><th>Time</th><th>Conf</th></tr></thead><tbody id="plBody"></tbody></table></div></div>
 </section>
 
+<section id="t_test" class="tab" hidden>
+  <div class="card"><h3>🧪 Test with a photo or video</h3>
+    <p class="hint">Runs the file through the same pipeline as the camera (enabled modules from config.yaml, detector, tracker, overlays) in a separate low-priority process. The live camera keeps running. Results go to a temp folder, not to your real events/attendance logs. Max 200 MB · jpg, png, mp4, avi, mov, mkv, webm.</p>
+    <form id="testForm" class="row"><input type="file" id="tFile" name="file" accept="image/*,video/*,.mp4,.avi,.mov,.mkv,.webm" required>
+      <label class="chk">Repeat image frames <input type="number" name="frames" value="10" min="1" max="100" style="width:5em"></label>
+      <label class="chk"><input type="checkbox" name="telegram" value="1"> Send Telegram alerts</label>
+      <button class="primary" id="tRun">▶ Run test</button><button type="button" id="tStop" hidden>■ Stop</button></form>
+    <div id="tDrop" class="hint" style="border:1px dashed #7aa2f7;border-radius:8px;padding:10px;text-align:center">…or drop a file here</div>
+    <div class="hint" id="tProg"></div><img id="tLive" alt="" style="width:100%;border-radius:10px;background:#000" hidden>
+    <div id="tRes"></div><details><summary class="hint">Process log</summary><pre id="tLog"></pre></details></div>
+</section>
+
 <section id="t_settings" class="tab" hidden>
   <div class="card"><h3>Telegram</h3><form id="tgForm">
     <label class="chk"><input type="checkbox" id="tgOn"> Enabled</label>
@@ -66,5 +78,5 @@
 </section>
 </main>
 <div id="toasts"></div>
-<script src="/static/app.js?v=1"></script>
+<script src="/static/app.js?v=2"></script>
 </body></html>

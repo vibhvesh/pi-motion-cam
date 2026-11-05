@@ -146,7 +146,7 @@ def safe_file(d, fn):
 
 # ---------- app ----------
 app = Flask(__name__, static_folder=str(Path(__file__).parent / "static"), static_url_path="/static")
-app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("PMC_MAX_UPLOAD_MB", 200)) * 1024 * 1024  # test-file uploads
 _secret = BASE / ".web_secret"
 try:
     if not _secret.exists():
@@ -643,6 +643,144 @@ def api_watchlist():
     wl = sorted({re.sub(r"[^A-Z0-9]", "", str(x).upper()) for x in items} - {""})
     save_cfg_patch("modules.plates.watchlist", wl, replace=True)
     return jsonify(ok=True, watchlist=wl)
+
+
+# ---------- test with a file (offline run of main.py's pipeline in a separate, low-priority process) ----------
+import sys
+import tempfile
+import uuid
+
+TEST_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".mp4", ".avi", ".mov", ".mkv", ".m4v", ".webm"}
+TEST_ROOT = Path(os.environ.get("PMC_TEST_DIR", Path(tempfile.gettempdir()) / "pi-motion-cam-tests"))
+_tests = {}  # id -> Popen
+
+
+def test_dir(tid):
+    if not re.fullmatch(r"[0-9a-f]{12}", tid or ""):
+        abort(404)
+    d = TEST_ROOT / tid
+    if not d.is_dir():
+        abort(404)
+    return d
+
+
+def _running():
+    return [t for t, p in _tests.items() if p.poll() is None]
+
+
+def _cleanup(keep=5):
+    if not TEST_ROOT.exists():
+        return
+    runs = sorted((d for d in TEST_ROOT.iterdir() if d.is_dir()), key=lambda d: d.stat().st_mtime, reverse=True)
+    for d in runs[keep:]:
+        if d.name not in _running():
+            shutil.rmtree(d, ignore_errors=True)
+
+
+@app.route("/api/test", methods=["POST"])
+@auth
+def api_test_start():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(error="Choose an image or video file"), 400
+    ext = Path(f.filename).suffix.lower()
+    if ext not in TEST_EXT:
+        return jsonify(error=f"Unsupported file type {ext or '?'} (use jpg/png/mp4/avi/mov/mkv/webm)"), 400
+    if _running():
+        return jsonify(error="A test is already running — wait for it or stop it"), 409
+    tid = uuid.uuid4().hex[:12]
+    d = TEST_ROOT / tid
+    d.mkdir(parents=True)
+    src = d / ("input" + ext)  # never trust the uploaded filename for paths
+    f.save(src)
+    display = re.sub(r"[^\w .\-]", "_", Path(f.filename).name)[:80]
+    (d / "meta.json").write_text(json.dumps({"name": display, "size": src.stat().st_size, "started": time.time()}))
+    frames = max(1, min(100, request.form.get("frames", 10, type=int)))
+    cmd = [os.environ.get("PMC_PYTHON", sys.executable), str(Path(__file__).resolve().parent.parent / "main.py"), "--source", str(src), "--out", str(d / "out"), "--frames", str(frames)]
+    if request.form.get("telegram") in ("1", "true", "on"):
+        cmd.append("--telegram")
+    if shutil.which("nice"):
+        cmd = ["nice", "-n", "15"] + cmd
+    if shutil.which("ionice"):
+        cmd = ["ionice", "-c", "3"] + cmd
+    log = open(d / "log.txt", "w")
+    _tests[tid] = subprocess.Popen(cmd, cwd=BASE, stdout=log, stderr=subprocess.STDOUT, env=dict(os.environ, PMC_CONFIG=str(CONFIG)))
+    _cleanup()
+    return jsonify(id=tid, name=display)
+
+
+@app.route("/api/test/<tid>")
+@auth
+def api_test_status(tid):
+    d = test_dir(tid)
+    out = d / "out"
+    p = _tests.get(tid)
+    running = bool(p and p.poll() is None)
+    meta = json.loads((d / "meta.json").read_text())
+    st = {}
+    try:
+        st = json.loads((out / "live" / "status.json").read_text())
+    except (OSError, ValueError):
+        pass
+    res = None
+    if (out / "result.json").exists():
+        res = json.loads((out / "result.json").read_text())
+        for e in res.get("events", []):
+            e["snapshot"] = Path(e["snapshot"]).name if e.get("snapshot") else ""
+            e["source"] = "file:" + meta["name"]
+    log_tail = (d / "log.txt").read_text()[-3000:] if (d / "log.txt").exists() else ""
+    rc = p.poll() if p else None
+    return jsonify(id=tid, name=meta["name"], running=running, returncode=rc, progress=st.get("progress"),
+                   counts=st.get("counts"), result=res, log=log_tail,
+                   failed=(not running and res is None) or (rc not in (None, 0)))
+
+
+@app.route("/api/test/<tid>/stop", methods=["POST"])
+@auth
+def api_test_stop(tid):
+    test_dir(tid)
+    p = _tests.get(tid)
+    if p and p.poll() is None:
+        p.terminate()
+    return jsonify(ok=True)
+
+
+@app.route("/api/test/<tid>/stream.mjpg")
+@auth
+def api_test_stream(tid):
+    d = test_dir(tid)
+    live = d / "out" / "live" / "live.jpg"
+
+    def gen():
+        last, idle = None, 0
+        while idle < 50:
+            try:
+                mt = live.stat().st_mtime
+                if mt != last:
+                    last, idle = mt, 0
+                    data = live.read_bytes()
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(data)).encode() + b"\r\n\r\n" + data + b"\r\n"
+            except OSError:
+                pass
+            p = _tests.get(tid)
+            if not (p and p.poll() is None):
+                idle += 10  # finished: send the last frame, then end the stream soon
+            time.sleep(0.1)
+            idle += 1
+    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame", headers={"Cache-Control": "no-store"})
+
+
+@app.route("/api/test/<tid>/last.jpg")
+@auth
+def api_test_last(tid):
+    p = test_dir(tid) / "out" / "live" / "live.jpg"
+    return send_file(p) if p.exists() else (placeholder_jpeg("No frame yet"), 200, {"Content-Type": "image/jpeg"})
+
+
+@app.route("/api/test/<tid>/captures/<fn>")
+@auth
+def api_test_capture(tid, fn):
+    return send_file(safe_file(test_dir(tid) / "out" / "captures", fn))
 
 
 def main():

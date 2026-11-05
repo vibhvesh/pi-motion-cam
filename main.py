@@ -27,7 +27,8 @@ log = logging.getLogger("motioncam")
 COLORS = {"person": (0, 255, 0)}
 
 
-def load_config(path=BASE / "config.yaml"):
+def load_config(path=None):
+    path = path or os.environ.get("PMC_CONFIG") or BASE / "config.yaml"
     with open(path) as f:
         cfg = yaml.safe_load(f) or {}
     tg = cfg.setdefault("events", {}).setdefault("telegram", {})
@@ -101,12 +102,56 @@ class LivePublisher:
         os.replace(tmp, self.dir / "status.json")
 
 
+def test_config(cfg, out, telegram):
+    """Redirect every output of a file test into `out` so the live service's data is never touched."""
+    out.mkdir(parents=True, exist_ok=True)
+    ev = cfg.setdefault("events", {})
+    ev["events_dir"], ev["snapshot_dir"] = str(out / "events"), str(out / "captures")
+    ev.setdefault("telegram", {})["enabled"] = bool(telegram and ev.get("telegram", {}).get("enabled"))
+    cfg["summary"] = {"enabled": False, "dir": str(out / "summaries")}
+    web = cfg.setdefault("web", {})
+    web["live_dir"], web["live_fps"] = str(out / "live"), 5
+    for name, mc in (cfg.get("modules") or {}).items():
+        if not mc:
+            continue
+        if name == "attendance":
+            mc["known_faces_dir"] = str(BASE / mc.get("known_faces_dir", "known_faces"))   # read the real enrolled faces
+            mc["unknown_faces_dir"], mc["dir"] = str(out / "unknown_faces"), str(out / "attendance")
+            mc["min_interval_seconds"] = 0
+        if name == "plates":
+            mc["dir"] = str(out / "plates")
+        mc["active_hours"] = ""   # a test should not depend on the time of day
+    return cfg
+
+
+def write_test_result(out, src, modules, bus):
+    import csv
+    import json
+    rows = []
+    for p in sorted(Path(bus.dir).glob("*.csv")):
+        with open(p) as f:
+            rows += list(csv.DictReader(f))
+    res = {"file": Path(getattr(src, "path", "")).name, "progress": getattr(src, "progress", None),
+           "modules": [m.name for m in modules], "summary": {m.name: m.summary() for m in modules},
+           "events": rows, "finished": time.time()}
+    (out / "result.json").write_text(json.dumps(res, indent=2, default=str))
+    log.info("Test result: %d event(s) -> %s", len(rows), out / "result.json")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--summary", action="store_true", help="print today's summary JSON and exit")
+    ap.add_argument("--source", help="TEST: run an image/video file through the pipeline instead of the camera")
+    ap.add_argument("--out", help="TEST: output dir for events/captures/attendance/plates/live (required with --source)")
+    ap.add_argument("--frames", type=int, default=10, help="TEST: repeat a still image N times (tracking needs several frames)")
+    ap.add_argument("--telegram", action="store_true", help="TEST: also send Telegram alerts (off by default)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = load_config()
+    if args.source:
+        import signal
+        signal.signal(signal.SIGTERM, lambda *a: (_ for _ in ()).throw(KeyboardInterrupt()))  # stop -> still write result.json
+        cfg = test_config(cfg, Path(args.out or "test_out").resolve(), args.telegram)
     cam_c, mot_c, det_c = cfg.get("camera", {}), cfg.get("motion", {}), cfg.get("detector", {})
     ctx = SimpleNamespace(base=BASE, min_motion_area=mot_c.get("min_area", 800))
     modules = load_modules(cfg.get("modules", {}), ctx)
@@ -119,15 +164,24 @@ def main():
     if not modules:
         log.warning("No modules enabled in config.yaml (modules: ...). Only motion will be computed.")
 
-    from picamera2 import Picamera2
-    picam = Picamera2()
+    if args.source:
+        from modules.filesource import EndOfFile, FileSource
+        picam = FileSource(args.source, args.frames)
+    else:
+        from picamera2 import Picamera2
+        picam = Picamera2()
+
+        class EndOfFile(Exception):
+            pass
     conf = picam.create_video_configuration(
         main={"size": tuple(cam_c.get("main_size", [2304, 1296])), "format": "RGB888"},
         lores={"size": tuple(cam_c.get("lores_size", [320, 240])), "format": "YUV420"},
         controls={"FrameRate": cam_c.get("framerate", 10)})
     picam.configure(conf)
     picam.start()
-    time.sleep(mot_c.get("warmup_seconds", 2))
+    if not args.source:
+        time.sleep(mot_c.get("warmup_seconds", 2))
+    clock = getattr(picam, "clock", time.time)
     lw, lh = conf["lores"]["size"]
 
     motion = MotionDetector(mot_c)
@@ -139,7 +193,7 @@ def main():
     conf_thr, night_c = det_c.get("confidence", 0.4), det_c.get("night", {})
     last_det, was_active = 0.0, False
     live = LivePublisher(cfg.get("web", {}) or {})
-    cfg_path = BASE / "config.yaml"
+    cfg_path = Path(os.environ.get("PMC_CONFIG") or BASE / "config.yaml")
     cfg_mtime, cfg_check, started = cfg_path.stat().st_mtime, 0.0, time.time()
     last_dets = []
 
@@ -178,14 +232,14 @@ def main():
     def status(ts, moved, area):
         return {"ts": ts, "started": started, "modules": [m.name for m in modules],
                 "counts": {m.name: m.summary() for m in modules}, "motion": bool(moved), "motion_area": int(area),
-                "detector": type(detector).__name__ if detector else None, "tracks": len(tracker.tracks) if hasattr(tracker, "tracks") else None}
+                "detector": type(detector).__name__ if detector else None, "progress": getattr(picam, "progress", None), "tracks": len(tracker.tracks) if hasattr(tracker, "tracks") else None}
 
     try:
         while True:
             yuv = picam.capture_array("lores")
             gray = yuv[:lh, :lw]
-            ts = time.time()
-            if ts - cfg_check > 2:
+            ts = clock()
+            if not args.source and ts - cfg_check > 2:
                 cfg_check = ts
                 try:
                     mt = cfg_path.stat().st_mtime
@@ -237,10 +291,15 @@ def main():
                     live.publish(shown, ts, status(ts, moved, area))
             if moved and events:
                 motion.prev = None
+    except EndOfFile:
+        log.info("End of test file")
     except KeyboardInterrupt:
         log.info("Stopping")
     finally:
-        summary.write(modules)
+        if args.source:
+            write_test_result(Path(args.out or "test_out").resolve(), picam, modules, bus)
+        else:
+            summary.write(modules)
         picam.stop()
 
 

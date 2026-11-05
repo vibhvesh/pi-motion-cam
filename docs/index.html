@@ -4,22 +4,31 @@
 <meta name="theme-color" content="#0f1419">
 <title>Pi Motion Cam – Smart camera (web)</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?v=7">
+<link rel="stylesheet" href="style.css?v=8">
 </head><body>
 <header>
-  <h1>📷 Pi Motion Cam <small>web <span id="ver">v7</span></small></h1>
+  <h1>📷 Pi Motion Cam <small>web <span id="ver">v8</span></small></h1>
   <button id="unkBadge" class="badge" hidden>⚠️ <b id="unkCount">0</b> unknown</button>
   <span id="status">Idle</span>
 </header>
 <div id="toasts"></div>
 <main>
 <section class="card stagecard">
-  <div class="stage" id="stage"><video id="video" playsinline muted></video><canvas id="overlay"></canvas>
+  <div class="stage" id="stage"><video id="video" playsinline muted></video><canvas id="fileCanvas" hidden></canvas><div id="dropHint" hidden>Drop an image or video to test</div><canvas id="overlay"></canvas>
     <div class="editbar" id="editBar" hidden><span id="editMsg"></span><button id="editUndo">Undo</button><button id="editDone" class="primary">Done</button><button id="editCancel">Cancel</button></div>
   </div>
   <div class="row ctrl">
     <button id="startBtn" class="primary">▶ Start camera</button><button id="stopBtn" hidden>■ Stop</button>
     <button id="flipBtn" title="Switch front/back camera">🔄 Flip</button><button id="snapBtn">📸 Snapshot</button>
+    <label class="btn" title="Run a photo or video through the modules">📁 Test with file<input type="file" id="testFile" accept="image/*,video/*,.mp4,.webm,.mov,.m4v" hidden></label>
+  </div>
+  <div id="filePanel" class="filepanel" hidden>
+    <div class="row"><b id="fileName"></b><span class="hint">Results are marked <code>source=file:…</code> in Events.</span><button id="fileBack">📷 Back to camera</button></div>
+    <div class="row" id="vidCtl" hidden><button id="vidPlay">⏸ Pause</button><input type="range" id="vidSeek" min="0" max="1000" value="0" step="1"><span id="vidTime" class="hint">0:00</span>
+      <label class="inl">Speed <select id="vidSpeed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label></div>
+    <div class="row" id="imgCtl" hidden><label class="inl">Repeat frames <input type="number" id="imgFrames" class="inl" min="1" max="100" value="10"></label><button id="imgRerun">↻ Run again</button></div>
+    <label class="chk"><input type="checkbox" id="testTg"> Send Telegram alerts for test files (off by default)</label>
+    <div id="fileResults"></div>
   </div>
   <div class="hint" id="liveStats">Camera off</div>
 </section>
@@ -60,24 +69,24 @@
 </section>
 </main>
 <footer>All processing happens locally in your browser. <a href="https://github.com/vibhvesh/pi-motion-cam">Raspberry Pi version on GitHub</a></footer>
-<script src="vendor/tf.min.js?v=7"></script>
-<script src="vendor/tf-backend-wasm.min.js?v=7"></script>
-<script src="vendor/coco-ssd.min.js?v=7"></script>
-<script src="vendor/pose-detection.min.js?v=7"></script>
-<script src="vendor/tesseract/tesseract.min.js?v=7"></script>
-<script src="js/core.js?v=7"></script>
-<script src="js/modules/attendance.js?v=7"></script>
-<script src="js/modules/counter.js?v=7"></script>
-<script src="js/modules/zone.js?v=7"></script>
-<script src="js/modules/fall.js?v=7"></script>
-<script src="js/modules/fight.js?v=7"></script>
-<script src="js/modules/perimeter.js?v=7"></script>
-<script src="js/modules/loiter.js?v=7"></script>
-<script src="js/modules/occupancy.js?v=7"></script>
-<script src="js/modules/animal.js?v=7"></script>
-<script src="js/modules/afterhours.js?v=7"></script>
-<script src="js/modules/scene.js?v=7"></script>
-<script src="js/modules/plates.js?v=7"></script>
-<script src="js/modules/motion.js?v=7"></script>
-<script src="js/ui.js?v=7"></script>
+<script src="vendor/tf.min.js?v=8"></script>
+<script src="vendor/tf-backend-wasm.min.js?v=8"></script>
+<script src="vendor/coco-ssd.min.js?v=8"></script>
+<script src="vendor/pose-detection.min.js?v=8"></script>
+<script src="vendor/tesseract/tesseract.min.js?v=8"></script>
+<script src="js/core.js?v=8"></script>
+<script src="js/modules/attendance.js?v=8"></script>
+<script src="js/modules/counter.js?v=8"></script>
+<script src="js/modules/zone.js?v=8"></script>
+<script src="js/modules/fall.js?v=8"></script>
+<script src="js/modules/fight.js?v=8"></script>
+<script src="js/modules/perimeter.js?v=8"></script>
+<script src="js/modules/loiter.js?v=8"></script>
+<script src="js/modules/occupancy.js?v=8"></script>
+<script src="js/modules/animal.js?v=8"></script>
+<script src="js/modules/afterhours.js?v=8"></script>
+<script src="js/modules/scene.js?v=8"></script>
+<script src="js/modules/plates.js?v=8"></script>
+<script src="js/modules/motion.js?v=8"></script>
+<script src="js/ui.js?v=8"></script>
 </body></html>
