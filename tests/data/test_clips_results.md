@@ -95,3 +95,37 @@ Tuned fall run (`cfg/fall_tuned.yaml`: down_seconds 2, drop_fraction 0.15, detec
 - **Tamper:** 0/3. Covering or moving the camera in these demos lasts under 3 s, or the scene stays bright. Try `hold_seconds: 1–2` and `scene_change: 0.3`, and test it physically on the real camera.
 - **Fire/smoke (experimental):** 2/3. The colour/flicker heuristic catches clear flames, not small or screen-recorded ones. Keep real smoke detectors.
 - **Use realistic test data:** many YouTube "demo" clips are vendor screen recordings with overlays, picture-in-picture, or footage filmed off monitors. Record 15–60 s clips from your **own camera position** for real acceptance tests.
+
+## v9 re-run: before/after (same 34 clips, same method, 2026-11-05)
+Before = v8 code with the test configs (plates: min_conf 40, tries 6). After = v9 code with the new defaults (`cfg_v9/`). OCR = tesserocr shim (Tesseract 5.5.3). A plate counts as "exact" only if every character matches the plate crop checked by eye; "near" means 1–2 characters wrong or missing.
+
+### Plates (logged plate events)
+| Clip | Before (v8) | After v9, Tesseract (default) | After v9, `--alpr` ONNX detector + fast-plate-ocr |
+|---|---|---|---|
+| P01 traffic | AP29BW12 (partial) | **TS09EG6531 ✅**, AP10AR0858 (near), AP29AG1358, RANSPORT (junk) | 10 events, 0 exact; ~7 near (TS0EG6531, AP9CP5546, AP09U6490, TS09U2666, 13EB1617…) |
+| P02 overhead | APV8600 ✅ (overlay), AP53175, AKANE (junk) | APV8600 ✅, AP53175 | 6 events: RDG1108 (near, true BDG1108), AQK9063 (near) + 4 unverified |
+| P03 road level | **DL7CM3702 ✅**, RJ22TPB0345 (near) | **RJ27PB0345 ✅**, DL7CR3702 (near) | **DL7CM3702 ✅**, UP800211 (near), 2 junk |
+| P04 gate | – | ACCURAC (junk) | 2 junk |
+| P05 truck gate | – | CH49I9537 (wrong) | **WRP3975 ✅** (the truck is found by the plate detector) |
+| P06 dashcam | – | KA51HR5109 (near, true KA51MR5109) | KA51MR509 (near), 1 junk |
+| P07 night | – | – | 2 unverified (non-Indian plates, glare) |
+| P08 far highway | – | – | – (`min_plate_width: 60` drops tiny plates; without it there were 4 junk reads) |
+| **Total** | 6 events, **2 exact** | 11 events, **3 exact, 3 near**, 4 junk | 29 events, **2 exact, ~10 near**, rest junk/unverified |
+
+ONNX plate detector + Tesseract (`plate_detector: onnx`, `ocr_engine: tesseract`) was worse: 3 events, 0 exact. Tesseract does badly on the detector's tight crops.
+
+### Other modules (events)
+| Module / clip | Before | After v9 | Truth (by eye) |
+|---|---|---|---|
+| fall 18aTYzvL9DA | 0 | 0 | 1–2 falls |
+| fall 5GJbyg-g-0c | 0 | **1** | several falls |
+| fall fVWjhwXmyds | 0 | 0 | ~5 falls |
+| fight ×3 | 0/0/0 | 0/0/0 | scuffles in all 3 |
+| tamper FetFl09y3Qg | 0 | 0 | "covered" demo; frame stays bright and high-contrast (std 30–60), so it is not detectable as covered |
+| tamper lctnR6CDlIc | 0 | **moved ×2** | camera repointed ✅ |
+| tamper oh-5sQzm1OI | 0 | 0 | small move (layout similarity 0.76, threshold 0.35) |
+| farm-perimeter ×4 | tripwire 1/0/17/0, animal 3/4/13/0 | 1/0/17/0, animal 3/3/13/0 | the one change is a single fewer false "bird" |
+| intruder ×4 | 0/0/0/4 | 0/0/0/4 | unchanged |
+| loitering-crowd ×3 | 0 alerts (peaks 0/2/1) | unchanged | the detector misses small people |
+| in/out ×3 | 1/2, 1/1, 1/1 | 1/2, **1/2**, 1/1 | under-counting persists |
+| fire-smoke ×3 | 1/0/1 | 1/0/1 | unchanged |
