@@ -130,7 +130,7 @@
   function prep(src, r, binarize, angle = 0) {  // crop (inset for white blobs, padded for edge boxes), deskew, upscale, grayscale+contrast, optional Otsu
     const f = r.blob ? -0.03 : 0.06, px = r.w * f, py = r.h * (r.blob ? -0.05 : 0.08), R = { x: Math.max(0, r.x - px), y: Math.max(0, r.y - py), w: r.w + 2 * px, h: r.h + 2 * py };
     const a = Math.abs(angle) * Math.PI / 180, hd = r.tight ? Math.max(R.h * Math.cos(a) - R.w * Math.sin(a), R.h * 0.3) : R.h;   // deskewed text-band height
-    const sc = Math.min(3, Math.max(0.3, 100 / hd)), cw = Math.round(R.w * sc), ch = Math.round(R.h * sc);
+    const sc = Math.min(6, Math.max(0.3, 100 / hd)), cw = Math.round(R.w * sc), ch = Math.round(R.h * sc);
     if (r.tight) { ocrC.width = Math.round(cw / Math.cos(a)) + 30; ocrC.height = Math.round(hd * sc) + 30; }   // fit the deskewed line, don't clip its ends
     else { ocrC.width = cw + 20; ocrC.height = ch + 20; }
     const x = ocrC.getContext('2d', { willReadFrequently: true }); x.fillStyle = '#fff'; x.fillRect(0, 0, ocrC.width, ocrC.height);
@@ -198,12 +198,13 @@
   const M = SC.register({
     id: 'plates', name: 'Vehicles & number plates', icon: '🚘',
     desc: 'Counts vehicles and reads number plates (tesseract.js OCR, ~6 MB, loaded when enabled). Each new vehicle is read once, retried on later frames until a confident Indian-format plate (e.g. MH12AB1234) is found. IN = first read (or crossing the line in the IN direction), OUT = line crossing or not seen for the timeout.',
-    defaults: { classes: ['car', 'truck', 'bus', 'motorcycle'], tries: 4, minConf: 55, indianOnly: false, outMin: 2, watchlist: '', line: null, cooldown: 5 },
+    defaults: { classes: ['car', 'truck', 'bus', 'motorcycle'], tries: 8, minConf: 40, votes: 2, indianOnly: false, outMin: 2, watchlist: '', line: null, cooldown: 5 },
     geometry: ['line'],
     fields: [
       { k: 'classes', label: 'Vehicle classes', type: 'classes', options: VEH },
       { k: 'tries', label: 'OCR attempts per vehicle', type: 'range', min: 1, max: 10, step: 1 },
       { k: 'minConf', label: 'Min. OCR confidence', type: 'range', min: 20, max: 95, step: 5 },
+      { k: 'votes', label: 'Same text read N times before logging (majority vote)', type: 'range', min: 1, max: 5, step: 1 },
       { k: 'indianOnly', label: 'Only accept Indian-format plates', type: 'check' },
       { k: 'outMin', label: 'Mark OUT when not seen for (min) — if no line', type: 'range', min: 0.5, max: 60, step: 0.5 },
       { k: 'watchlist', label: 'Watchlist plates (alert)', type: 'text', placeholder: 'MH12AB1234, DL3CAF0001' },
@@ -218,17 +219,18 @@
         if (L) { const s = SC.geo.side(SC.geo.center(t), L[0], L[1]), prev = st.side; if (s) st.side = s; if (prev && s && s !== prev) { st.dir = s < 0 ? 'in' : 'out'; if (st.best) record(st.best, t, st.dir, null); } }
       }
       if (!worker || ocrBusy) return;
-      const now = F.now, t = vehicles.filter(t => { const st = t.flags.plate; return st.tries < this.cfg.tries && now >= st.next && !(st.best?.indian && st.best.conf > 80) && t.box[2] > 40; })
+      const now = F.now, t = vehicles.filter(t => { const st = t.flags.plate; return st.tries < this.cfg.tries && now >= st.next && !st.emitted && t.box[2] > 40; })
         .sort((a, b) => b.box[2] * b.box[3] - a.box[2] * a.box[3])[0];
       if (!t) return;
       const st = t.flags.plate; st.tries++; st.next = now + 1200; ocrBusy = true;
       const snap = document.createElement('canvas'); snap.width = S.video.videoWidth; snap.height = S.video.videoHeight; snap.getContext('2d').drawImage(S.video, 0, 0);
       readPlate(snap, t.box.map((v, i) => v * (i % 2 ? S.vy : S.vx)), st.tries % 2 ? 0.35 : 0.1).then(r => {   // alternate: lower box (typical) / almost whole box (close-up)
-        if (!r || (r.conf < this.cfg.minConf && !(r.indian && r.conf >= 35)) || (this.cfg.indianOnly && !r.indian)) return;
-        if (!st.best || r.score + r.conf > st.best.score + st.best.conf) {
-          const first = !st.best; st.best = r; t.flags.plateText = r.plate;
-          if (first) record(r, t, st.dir || null, snap); else { const p = plates[r.plate]; if (!p) record(r, t, st.dir || null, snap); }
-        }
+        // v9: Indian-format reads count at any confidence; majority vote across frames of this vehicle
+        if (!r || (!r.indian && (r.conf < this.cfg.minConf || this.cfg.indianOnly))) return;
+        const v = (st.votes ||= {})[r.plate] ||= { n: 0, r }; v.n++; if (r.conf > v.r.conf) v.r = r;
+        const win = Object.values(st.votes).sort((a, b) => b.n - a.n || b.r.indian - a.r.indian || b.r.conf - a.r.conf)[0];
+        st.best = win.r; t.flags.plateText = win.r.plate;
+        if (!st.emitted && (win.n >= this.cfg.votes || st.tries >= this.cfg.tries || (win.r.indian && win.r.conf > 85))) { st.emitted = true; record(win.r, t, st.dir || null, snap); }
       }).catch(e => console.warn('ocr', e)).finally(() => ocrBusy = false);
     },
     draw(c, W, H) {

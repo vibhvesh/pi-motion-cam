@@ -2,12 +2,12 @@
 SC.register({
   id: 'tamper', name: 'Camera tamper', icon: '🛡️',
   desc: 'Detects when the camera is covered or dark, out of focus or smeared (Laplacian sharpness), or suddenly moved (scene changed).',
-  defaults: { enabled: true, dark: 15, flat: 8, blur: 12, change: 0.5, holdSec: 3, cooldown: 120 },
+  defaults: { enabled: true, dark: 15, flat: 8, blur: 12, change: 0.3, struct: 0.35, blurRatio: 0.25, holdSec: 1.5, cooldown: 120 },
   fields: [
     { k: 'dark', label: 'Covered if brightness <', type: 'range', min: 2, max: 60, step: 1 },
     { k: 'blur', label: 'Blurred if sharpness <', type: 'range', min: 1, max: 80, step: 1 },
     { k: 'change', label: 'Moved if similarity <', type: 'range', min: 0.1, max: 0.9, step: 0.05 },
-    { k: 'holdSec', label: 'Must last (s)', type: 'range', min: 1, max: 15, step: 1 },
+    { k: 'holdSec', label: 'Must last (s)', type: 'range', min: 0.5, max: 15, step: 0.5 },
   ],
   st: {}, ref: null, refT: 0, lastT: 0,
   check(key, bad, now, msg) {
@@ -26,14 +26,20 @@ SC.register({
     const lap = lq / ln - (ls / ln) ** 2;
     const norm = h => { const m = h.reduce((a, b) => a + b) / h.length; return h.map(v => v - m); };
     const hn = norm(hist);
-    if (!this.ref || (now - this.refT > 30000 && !this.st.moved && !this.st.covered)) { this.ref = hn; this.refT = now; }
+    // 32x24 thumbnail, zero-mean/unit-var: layout similarity catches pans/turns that keep the histogram
+    const tw = 32, th = 24, thumb = new Float32Array(tw * th);
+    for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) thumb[y * tw + x] = g[((y + 0.5) * H / th | 0) * W + ((x + 0.5) * W / tw | 0)];
+    { let m = 0, v = 0; for (const a of thumb) m += a; m /= thumb.length; for (const a of thumb) v += (a - m) ** 2; v = Math.sqrt(v / thumb.length) + 1e-6; for (let i = 0; i < thumb.length; i++) thumb[i] = (thumb[i] - m) / v; }
+    if (!this.ref || (now - this.refT > 30000 && !Object.keys(this.st).length)) { this.ref = hn; this.refT = now; this.refThumb = thumb; this.refLap = lap; }
     let num = 0, da = 0, db = 0; for (let i = 0; i < 32; i++) { num += hn[i] * this.ref[i]; da += hn[i] ** 2; db += this.ref[i] ** 2; }
     const corr = num / Math.sqrt(da * db + 1e-9);
-    this.live = { mean, std, lap, corr };
-    this.check('covered', mean < this.cfg.dark || std < this.cfg.flat, now, `Camera covered or dark (brightness ${mean.toFixed(0)})`);
-    this.check('blurred', lap < this.cfg.blur && std >= this.cfg.flat, now, `Camera blurred / smeared (sharpness ${lap.toFixed(0)})`);
-    this.check('moved', corr < this.cfg.change, now, `Scene changed suddenly — camera moved? (similarity ${corr.toFixed(2)})`);
-    if (this.st.moved?.alerted) { this.ref = hn; this.refT = now; delete this.st.moved; }
+    let ncc = 0; for (let i = 0; i < thumb.length; i++) ncc += thumb[i] * this.refThumb[i]; ncc /= thumb.length;
+    const covered = mean < this.cfg.dark || std < this.cfg.flat;
+    this.live = { mean, std, lap, corr: Math.min(corr, ncc) };
+    this.check('covered', covered, now, `Camera covered or dark (brightness ${mean.toFixed(0)})`);
+    this.check('blurred', !covered && (lap < this.cfg.blur || (this.refLap > 4 * this.cfg.blur && lap < this.cfg.blurRatio * this.refLap)), now, `Camera blurred / smeared (sharpness ${lap.toFixed(0)})`);
+    this.check('moved', !covered && (corr < this.cfg.change || ncc < this.cfg.struct), now, `Scene changed suddenly — camera moved? (similarity ${Math.min(corr, ncc).toFixed(2)})`);
+    if (this.st.moved?.alerted) { this.ref = hn; this.refT = now; this.refThumb = thumb; this.refLap = lap; delete this.st.moved; }
   },
   stats() { const l = this.live; return { Covered: this.counts.covered || 0, Blurred: this.counts.blurred || 0, Moved: this.counts.moved || 0, ...(l ? { 'Live': `bright ${l.mean.toFixed(0)} · sharp ${l.lap.toFixed(0)} · sim ${l.corr.toFixed(2)}` } : {}) }; },
 });

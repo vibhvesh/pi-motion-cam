@@ -188,7 +188,7 @@ def main():
     det_modules = [m for m in modules if type(m).process is not Module.process]  # modules that need full frames
     detector = make_detector(det_c, BASE) if any(m.needs_detection for m in det_modules) else None
     pose = make_pose(cfg.get("pose", {}), BASE) if any(m.needs_pose for m in modules) else None
-    tracker = Tracker(det_c.get("track_lost_seconds", 2.0))
+    tracker = Tracker(det_c.get("track_lost_seconds", 3.5))
     active_iv, idle_iv = det_c.get("interval_seconds", 0.3), det_c.get("idle_interval_seconds", 2.0)
     conf_thr, night_c = det_c.get("confidence", 0.4), det_c.get("night", {})
     last_det, was_active = 0.0, False
@@ -266,7 +266,7 @@ def main():
             frame = np.ascontiguousarray(picam.capture_array("main"))  # RGB888 is BGR-ordered -> OpenCV-ready
             dark = float(gray.mean()) < night_c.get("dark_brightness", 50)
             det_img = night_enhance(frame) if (dark and night_c.get("enhance", True)) else frame
-            thr = conf_thr * night_c.get("confidence_scale", 0.75) if dark else conf_thr
+            thr = (night_c.get("confidence") or conf_thr * night_c.get("confidence_scale", 0.75)) if dark else conf_thr
             dets = detector.detect(det_img, thr) if detector else []
             tracks = tracker.update(dets, ts, frame.shape[1])
             was_active = bool(dets)

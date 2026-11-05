@@ -17,9 +17,12 @@ class TamperModule(Module):
         self.dark = cfg.get("dark_threshold", 15)        # mean brightness below -> covered/dark
         self.flat = cfg.get("flat_std", 8)               # very uniform image -> covered
         self.blur = cfg.get("blur_threshold", 15)        # Laplacian variance below -> out of focus / smeared
-        self.change = cfg.get("scene_change", 0.5)       # histogram correlation below -> camera moved
-        self.hold = cfg.get("hold_seconds", 3)
+        self.change = cfg.get("scene_change", 0.3)       # histogram correlation below -> camera moved
+        self.hold = cfg.get("hold_seconds", 1.5)
+        self.struct = cfg.get("structure_change", 0.35)  # thumbnail correlation below -> moved
+        self.blur_ratio = cfg.get("blur_ratio", 0.25)    # sharpness below ratio x reference -> blurred
         self.ref, self.ref_ts, self.state = None, 0, {}
+        self.ref_thumb, self.ref_lap = None, None
 
     def _check(self, key, bad, ts, msg):
         if not bad:
@@ -36,14 +39,20 @@ class TamperModule(Module):
         mean, std = float(gray.mean()), float(gray.std())
         lap = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         hist = cv2.normalize(cv2.calcHist([gray], [0], None, [32], [0, 256]), None).flatten()
-        if self.ref is None or (ts - self.ref_ts > 60 and "moved" not in self.state):
-            self.ref, self.ref_ts = hist, ts       # slowly refresh reference while scene is stable
+        thumb = cv2.resize(cv2.GaussianBlur(gray, (5, 5), 0), (32, 24), interpolation=cv2.INTER_AREA).astype(np.float32).ravel()
+        thumb = (thumb - thumb.mean()) / (thumb.std() + 1e-6)
+        if self.ref is None or (ts - self.ref_ts > 60 and not self.state):
+            self.ref, self.ref_ts, self.ref_thumb, self.ref_lap = hist, ts, thumb, lap   # refresh while stable
         corr = float(cv2.compareHist(self.ref, hist, cv2.HISTCMP_CORREL))
-        ev = self._check("covered", mean < self.dark or std < self.flat, ts, f"Camera covered or dark (brightness {mean:.0f}, contrast {std:.0f})")
-        ev += self._check("blurred", lap < self.blur and std >= self.flat, ts, f"Camera view blurred / smeared (sharpness {lap:.0f})")
-        ev += self._check("moved", corr < self.change, ts, f"Scene changed suddenly — camera moved? (similarity {corr:.2f})")
+        ncc = float(np.dot(thumb, self.ref_thumb) / thumb.size)   # layout similarity (catches pan/turn)
+        covered = mean < self.dark or std < self.flat
+        ev = self._check("covered", covered, ts, f"Camera covered or dark (brightness {mean:.0f}, contrast {std:.0f})")
+        blurred = not covered and (lap < self.blur or (self.ref_lap and self.ref_lap > 4 * self.blur and lap < self.blur_ratio * self.ref_lap))
+        ev += self._check("blurred", blurred, ts, f"Camera view blurred / smeared (sharpness {lap:.0f})")
+        ev += self._check("moved", not covered and (corr < self.change or ncc < self.struct), ts,
+                          f"Scene changed suddenly — camera moved? (similarity {min(corr, ncc):.2f})")
         if ev and any(e.type == "moved" for e in ev):
-            self.ref, self.ref_ts = hist, ts
+            self.ref, self.ref_ts, self.ref_thumb, self.ref_lap = hist, ts, thumb, lap
         return ev
 
 

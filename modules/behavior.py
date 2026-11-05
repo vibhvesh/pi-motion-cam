@@ -12,27 +12,33 @@ class FallModule(Module):
 
     def __init__(self, cfg, ctx):
         super().__init__(cfg, ctx)
-        self.down_s = cfg.get("down_seconds", 5)
-        self.drop_frac = cfg.get("drop_fraction", 0.25)   # centroid drop as fraction of upright height
+        self.down_s = cfg.get("down_seconds", 2.5)
+        self.drop_frac = cfg.get("drop_fraction", 0.15)   # centroid drop as fraction of upright height
         self.window = cfg.get("fall_window_seconds", 2.0)
 
     @staticmethod
-    def _posture(t):
+    def _posture(t, st=None):
         ang = torso_angle(t.pose)
         if ang is not None:
             return "down" if ang > 60 else "up" if ang < 30 else None
         x, y, w, h = t.box
-        return "down" if w > 1.3 * h else "up" if h > 1.4 * w else None
+        if w > 1.0 * h:
+            return "down"
+        # no pose: a person seen upright whose box suddenly shrinks to <55% height while the
+        # top of the box drops (foreshortened / lying towards the camera) also counts as down
+        if st and st.get("up_h") and h < 0.55 * st["up_h"] and y > st.get("up_top", y) + 0.3 * st["up_h"]:
+            return "down"
+        return "up" if h > 1.4 * w else None
 
     def process(self, f):
         ev = []
         for t in f.tracks.values():
             if t.cls != PERSON:
                 continue
-            p = self._posture(t)
+            p = self._posture(t, t.flags.get("fall"))
             st = t.flags.setdefault("fall", {"state": "unknown", "up_ts": None, "up_h": None, "up_cy": None, "down_ts": None})
             if p == "up":
-                st.update(state="up", up_ts=f.ts, up_h=t.box[3], up_cy=t.centroid[1], down_ts=None)
+                st.update(state="up", up_ts=f.ts, up_h=t.box[3], up_top=t.box[1], up_cy=t.centroid[1], down_ts=None)
                 st.pop("alerted", None)
             elif p == "down" and st["state"] in ("up", "falling"):
                 if st["state"] == "up":
@@ -55,7 +61,7 @@ class FightModule(Module):
     def __init__(self, cfg, ctx):
         super().__init__(cfg, ctx)
         self.hold = cfg.get("hold_seconds", 3)
-        self.energy_thr = cfg.get("energy_threshold", 0.15)   # body-heights per second (pose) / motion fraction (fallback)
+        self.energy_thr = cfg.get("energy_threshold", 0.08)   # body-heights per second (pose) / motion fraction (fallback)
         self.close = cfg.get("proximity", 1.0)                 # center distance < proximity * mean box width
         self.since, self.alerted, self.energy = None, False, 0.0
 

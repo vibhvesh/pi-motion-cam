@@ -2,7 +2,7 @@
 SC.register({
   id: 'fight', name: 'Fight / violence', icon: '🥊', needsPose: true, experimental: true,
   desc: 'EXPERIMENTAL heuristic, not a trained violence classifier: two or more people close together with fast limb movement (MoveNet) or heavy motion around them for several seconds. Expect false alarms (dancing, hugging, sports).',
-  defaults: { holdSec: 3, energy: 1.0, proximity: 1.0, cooldown: 60 },
+  defaults: { holdSec: 3, energy: 0.6, proximity: 1.0, cooldown: 60 },
   fields: [
     { k: 'holdSec', label: 'Sustained for (s)', type: 'range', min: 1, max: 10, step: 1 },
     { k: 'energy', label: 'Limb speed threshold (body-heights/s)', type: 'range', min: 0.3, max: 4, step: 0.1 },

@@ -3,12 +3,13 @@
 #   --face   face recognition for attendance (builds dlib: 30+ min)
 #   --dnn    MobileNet-SSD detector (person + animals + vehicles, ~23 MB) for perimeter/animal/after-hours
 #   --ocr    Tesseract OCR for number plates (apt tesseract-ocr + pytesseract)
+#   --alpr   optional ONNX plate detector + fast-plate-ocr (pip onnxruntime open-image-models fast-plate-ocr, ~15 MB models)
 #   --no-service  don't install/enable the systemd services (camera + web dashboard)
 #   --pose   MoveNet Lightning TFLite pose model (~3 MB) for better fall/fight detection
 set -e
 cd "$(dirname "$0")"
-FACE=0; DNN=0; POSE=0; OCR=0; SVC=1
-for a in "$@"; do case "$a" in --face) FACE=1;; --dnn) DNN=1;; --pose) POSE=1;; --ocr) OCR=1;; --no-service) SVC=0;; --all) FACE=1; DNN=1; POSE=1; OCR=1;; esac; done
+FACE=0; DNN=0; POSE=0; OCR=0; ALPR=0; SVC=1
+for a in "$@"; do case "$a" in --face) FACE=1;; --dnn) DNN=1;; --pose) POSE=1;; --ocr) OCR=1;; --alpr) ALPR=1;; --no-service) SVC=0;; --all) FACE=1; DNN=1; POSE=1; OCR=1;; esac; done
 sudo apt update
 sudo apt install -y python3-picamera2 python3-opencv python3-numpy python3-venv python3-yaml python3-requests python3-flask curl
 [ $FACE = 1 ] && sudo apt install -y cmake build-essential libopenblas-dev liblapack-dev libjpeg-dev
@@ -17,6 +18,11 @@ python3 -m venv --system-site-packages venv
 ./venv/bin/pip install -r requirements.txt
 [ $FACE = 1 ] && ./venv/bin/pip install face_recognition   # builds dlib, can take 30+ min
 mkdir -p captures known_faces unknown_faces events summaries attendance models plates
+if [ $ALPR = 1 ]; then
+  ./venv/bin/pip install onnxruntime open-image-models fast-plate-ocr
+  ./venv/bin/python -c "from open_image_models import LicensePlateDetector as D; from fast_plate_ocr import LicensePlateRecognizer as R; D(detection_model='yolo-v9-t-384-license-plate-end2end'); R('cct-xs-v1-global-model')" \
+    && echo "ALPR models ready. Set modules.plates.plate_detector: onnx and/or ocr_engine: fast_plate_ocr"
+fi
 if [ $OCR = 1 ]; then
   sudo apt install -y tesseract-ocr
   ./venv/bin/pip install pytesseract

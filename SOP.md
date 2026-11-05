@@ -1,6 +1,6 @@
 # Pi Motion Cam: Standard Operating Procedure (SOP) & Best Practices
 
-Applies to: the Raspberry Pi 5 camera service (`main.py` + `modules/`), the Pi dashboard (`webui/`, port 8080), and the browser web app v8 (https://vibhvesh.github.io/pi-motion-cam/).
+Applies to: the Raspberry Pi 5 camera service (`main.py` + `modules/`), the Pi dashboard (`webui/`, port 8080), and the browser web app v9 (https://vibhvesh.github.io/pi-motion-cam/).
 Everything here is based on the code and `config.yaml` in this repo. Setting names are written exactly as they appear in `config.yaml`.
 
 ---
@@ -29,7 +29,7 @@ The dashboard has a **single shared password** (`web.password`). There are no pe
 **General camera rules**
 - **Avoid backlight.** Never point the camera at a window, glass door or the sun. Faces turn into silhouettes, and motion and tamper alerts go off.
 - Keep lighting steady. Flickering lights, TVs, moving curtains, trees and car headlights are the main causes of false motion.
-- At night the Pi brightens frames and lowers the detection threshold (`detector.night`: `dark_brightness`, `enhance`, `confidence_scale`). This only helps up to a point. Add an IR illuminator with a NoIR camera, or a soft white light. Note that face recognition and colour-based fire detection work poorly in IR or greyscale video.
+- At night the Pi brightens frames and lowers the detection threshold (`detector.night`: `dark_brightness`, `enhance`, and `confidence` = 0.3 at night, falling back to `confidence_scale`). This only helps up to a point. Add an IR illuminator with a NoIR camera, or a soft white light. Note that face recognition and colour-based fire detection work poorly in IR or greyscale video.
 - Mount the camera solidly. Vibration or knocks set off `tamper` (`scene_change`).
 
 | Module | Placement |
@@ -53,6 +53,7 @@ The dashboard has a **single shared password** (`web.password`). There are no pe
    | `--dnn` | MobileNet-SSD detector for people, animals and vehicles. Set `detector.type: mobilenet_ssd`. |
    | `--face` | `face_recognition`/dlib for attendance. The build takes 30+ minutes. |
    | `--ocr` | Tesseract OCR for number plates |
+   | `--alpr` | Optional ONNX plate detector (YOLOv9-t) + fast-plate-ocr, both MIT-licensed, about 15 MB; then set `plates.plate_detector: onnx` and/or `plates.ocr_engine: fast_plate_ocr` |
    | `--pose` | MoveNet pose model for better fall and fight detection. Set `pose.enabled: true`. |
    | `--no-service` | Skips installing the systemd services |
 3. The installer creates the `venv`, installs and starts `pi-motion-cam` (camera) and `pi-motion-cam-web` (dashboard), and prints **`Dashboard: http://<pi-ip>:8080`**.
@@ -176,12 +177,12 @@ The browser web app stores its settings, faces, events and attendance in that br
 | `perimeter` | `line`, `direction`, `classes` | Birds, cats, shadows → remove `bird`/`cat` from `classes`, set `direction` |
 | `loitering` | `max_seconds`, `zones` | Staff working normally → zones only where loitering matters; raise `max_seconds` |
 | `occupancy` | `max_people`, `hold_seconds` | Brief crowding → raise `hold_seconds` |
-| `fall` | `down_seconds`, `drop_fraction` | People sitting on the floor, lying on sofas, bending → raise `down_seconds`; enable pose (`--pose`) |
-| `fight` **(experimental)** | `hold_seconds`, `energy_threshold`, `proximity` | Hugs, sports, dancing, kids playing → raise `energy_threshold`/`hold_seconds`; always verify on video |
-| `tamper` | `dark_threshold`, `flat_std`, `blur_threshold`, `scene_change`, `hold_seconds` | Lights switched off, sudden IR switch, camera knocked → raise `hold_seconds`; mount firmly |
+| `fall` | `down_seconds`, `drop_fraction` | Defaults since v9: `down_seconds: 2.5`, `drop_fraction: 0.15`. People sitting on the floor, lying on sofas, bending → raise `down_seconds`; enable pose (`--pose`) |
+| `fight` **(experimental)** | `hold_seconds`, `energy_threshold`, `proximity` | Default `energy_threshold: 0.08` since v9 (more sensitive). Hugs, sports, dancing, kids playing → raise `energy_threshold`/`hold_seconds`; always verify on video |
+| `tamper` | `dark_threshold`, `flat_std`, `blur_threshold`, `blur_ratio`, `scene_change`, `structure_change`, `hold_seconds` | v9 defaults: `hold_seconds: 1.5`, `scene_change: 0.3`, plus layout (`structure_change: 0.35`) and relative blur (`blur_ratio: 0.25`) checks against a reference frame. Lights switched off, sudden IR switch, camera knocked → raise `hold_seconds`; mount firmly |
 | `fire_smoke` **(experimental)** | `min_fire_fraction`, `flicker_threshold`, `min_smoke_fraction` | Sunsets, orange clothes or lights, flashing displays, fog, steam, dust → raise thresholds; **not a smoke alarm**, keep real detectors |
 | `animal` / `after_hours` | `classes`, `active_hours` | Pets, staff working late → adjust `classes`, `active_hours` |
-| `plates` | `min_confidence`, `tries`, `indian_only`, `watchlist`, `out_after_minutes` | Misreads (0/O, 8/B) → better angle and light, `indian_only: true`, raise `min_confidence`. OUT times are estimates unless a `line` is set |
+| `plates` | `min_confidence` (40), `tries` (8), `votes` (2), `char_height` (32), `plate_detector`, `ocr_engine`, `indian_only`, `watchlist`, `out_after_minutes` | v9: Indian-format reads are accepted at any OCR confidence, and a plate is logged only after the same text is read `votes` times on that vehicle (or when its tries run out or it leaves). Misreads (0/O, 8/B) → better angle and light, `indian_only: true`, raise `min_confidence`. OUT times are estimates unless a `line` is set |
 
 General rules:
 - Raise `cooldown_seconds` for modules that send too many alerts.
@@ -230,8 +231,8 @@ General rules:
 | 🎥 Live shows "Camera service not running" / no stream | Header shows the service state. In 🖥️ System press Restart, or run `sudo systemctl restart pi-motion-cam`. Then check the logs (System → Show logs, or `journalctl -u pi-motion-cam -f`). Test the camera with `rpicam-hello`. Only one program can use the camera at a time. |
 | Service keeps restarting | The logs usually show a YAML error in `config.yaml` (restore `config.yaml.bak`) or a missing optional package (for example *"Module attendance needs an optional package"*: re-run the installer with `--face`). |
 | Attendance module won't start on the Pi | `face_recognition` isn't installed: run `./install.sh --face`. |
-| Web app: face models fail to load | Click **Retry loading face models**, check the connection, then hard-refresh (Ctrl+F5) or clear the site cache. Make sure the header shows **v8**. |
-| Web app: can't type a name in the unknown queue (Edge) | Fixed in v7. Hard-refresh until the header says v8 (current). |
+| Web app: face models fail to load | Click **Retry loading face models**, check the connection, then hard-refresh (Ctrl+F5) or clear the site cache. Make sure the header shows **v9**. |
+| Web app: can't type a name in the unknown queue (Edge) | Fixed in v7. Hard-refresh until the header says v9 (current). |
 | Test file: "cannot decode" | Browser: use mp4 (H.264) or webm; mov only works where the browser supports its codec. Pi: OpenCV/FFmpeg must support the codec; convert it with `ffmpeg -i in.mov out.mp4`. |
 | Test file finishes with 0 events | No modules enabled, or a still image (no motion: use more *Repeat frames* and occupancy/zone modules). Check the process log in 🧪 Test file. |
 | Test file: "A test is already running" | Only one Pi test runs at a time. Wait, or press ■ Stop. |
@@ -239,7 +240,7 @@ General rules:
 | High CPU / temperature / slow | Lower `web.live_fps` (default 5) or `web.live_width`, raise `detector.idle_interval_seconds`, disable unused modules, turn off pose, and improve cooling. Close the 🎥 Live tab when not needed (the stream only runs while open). |
 | Too many Telegram messages | Raise `cooldown_seconds` or set `telegram: false` per module; use `active_hours`. |
 | No Telegram messages | ⚙️ Settings → **Send test**, and read the error. Did you message the bot first? Is the chat id right? Is `events.telegram.enabled` set? |
-| Plates not read | Need `detector.type: mobilenet_ssd` + `--ocr` + `modules.plates.enabled`; improve the angle and light; lower `min_confidence` carefully. |
+| Plates not read | Need `detector.type: mobilenet_ssd` + `--ocr` + `modules.plates.enabled`; improve the angle and light; lower `min_confidence` carefully; try `./install.sh --alpr` with `plate_detector: onnx` (also finds plates on trucks the vehicle detector misses). |
 | Disk full | Delete old `captures/` and `events/` (§7), or move to a larger SSD. |
 | Settings not applied | Hot reload takes about 2 s; camera size/fps need **Save & restart**. The logs show `config.yaml reloaded`. |
 

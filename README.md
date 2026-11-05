@@ -44,6 +44,13 @@ Limits: this is generic OCR, not a trained ANPR model. It needs a fairly close, 
 - The person detectors are lightweight (COCO-SSD lite / HOG / MobileNet-SSD), so small, distant or heavily occluded people and animals get missed. Tracking is simple centroid/IoU matching, so IDs can swap when people cross close together.
 - On the Pi, HOG detects **people only**. Animals and vehicles need `--dnn`. MobileNet-SSD (VOC classes) knows bird, cat, cow, dog, horse, sheep, car, bus, motorbike and bicycle, but not bear or elephant.
 
+### v9 tuning (from a 34-clip YouTube test, see `tests/data/test_clips_results.md`)
+- **Plates:** crops upscaled so characters are ~32 px tall, CLAHE, edge + white/yellow colour + aspect-ratio plate search, two-line plate mode (top/bottom OCR'd separately), Indian-format reads accepted at any Tesseract confidence, majority vote per vehicle (`votes: 2`), trucks/buses searched too, defaults `min_confidence: 40`, `tries: 8`. Optional `./install.sh --alpr`: `plate_detector: onnx` (YOLOv9-t plate detector, finds plates even when the vehicle detector misses the truck) and `ocr_engine: fast_plate_ocr`.
+- **Detector:** `detector.night.confidence: 0.3` at night (night enhancement kept); `track_lost_seconds: 3.5`.
+- **Fall:** `down_seconds: 2.5`, `drop_fraction: 0.15`; without pose a box that gets wider than tall, or shrinks below 55 % height while dropping, counts as "down".
+- **Fight (experimental):** `energy_threshold: 0.08`.
+- **Tamper:** `hold_seconds: 1.5`, `scene_change: 0.3`, plus layout similarity (`structure_change`) and relative blur (`blur_ratio`) against a reference frame.
+
 ## Web app
 
 Open https://vibhvesh.github.io/pi-motion-cam/ (it must be HTTPS for camera access) → **Start camera** → switch modules on in the **Modules** tab.
@@ -54,7 +61,7 @@ Open https://vibhvesh.github.io/pi-motion-cam/ (it must be HTTPS for camera acce
 - Performance: the object detector is throttled (fast while something moves, slow when idle). Pose runs only when a pose module is on **and** a person is in view (≤ 3 people, ~4/s), and never blocks detection. Faces run at ≤ 2/s.
 - All models (TF.js, COCO-SSD, MoveNet, face-api) are served from this site. tfjs picks WebGL, then WASM, then CPU. Append `?backend=wasm` or `?backend=cpu` to the URL to force one.
 
-### Test with a photo or video (web app v8)
+### Test with a photo or video (web app v9)
 Click **📁 Test with file** under the video, or drag and drop a file onto the video area.
 - **Images:** run through all enabled modules. *Repeat frames* (default 10) feeds the same frame several times, so tracking, hold timers and occupancy can trigger.
 - **Videos** (mp4, webm, and mov where the browser can decode it): play through exactly the same per-frame pipeline as the camera. You get play/pause, seek and 0.25–2× speed.
@@ -104,6 +111,7 @@ curl -sSL https://raw.githubusercontent.com/vibhvesh/pi-motion-cam/main/get.sh |
 | `--pose` | MoveNet Lightning TFLite + `ai-edge-litert` → set `pose.enabled: true` | ~3 MB |
 | `--face` | `face_recognition` (dlib) for attendance | 30+ min build |
 | `--ocr` | `tesseract-ocr` + `pytesseract` for the number plate module → set `modules.plates.enabled: true` | ~30 MB |
+| `--alpr` | optional `onnxruntime` + open-image-models YOLOv9-t plate detector + fast-plate-ocr (MIT) → `plates.plate_detector: onnx`, `plates.ocr_engine: fast_plate_ocr` | ~60 MB |
 
 The installer clones the repo to `~/pi-motion-cam` and creates a venv (`--system-site-packages`, so apt's picamera2/OpenCV are visible). It installs and starts two systemd services, `pi-motion-cam` (camera) and `pi-motion-cam-web` (dashboard), and prints the dashboard URL at the end. Pass `--no-service` to skip the services.
 
@@ -123,7 +131,7 @@ modules:
     zones: [{ name: store-room, points: [[0.6,0.5],[0.95,0.5],[0.95,0.95],[0.6,0.95]] }]
     active_hours: "19:00-08:00"
   perimeter: { enabled: true, classes: [person, cow, dog, horse, sheep], line: [[0, 0.7], [1, 0.7]] }
-  fall: { enabled: true, down_seconds: 5 }
+  fall: { enabled: true, down_seconds: 2.5 }
 ```
 How the Pi loop works: the lores stream runs motion and tamper checks on every frame. Detection runs every `interval_seconds` while there's activity, or `idle_interval_seconds` when idle, and feeds the tracker, then pose (optional), then the modules, then the event bus.
 When it's dark (`detector.night`), frames get a CLAHE contrast boost and a lower confidence threshold.

@@ -1,7 +1,7 @@
 /* Pi Motion Cam web — core: camera, detection, tracking, pose, event bus, Telegram, module registry. */
 'use strict';
 const SC = (() => {
-  const VERSION = '8';
+  const VERSION = '9';
   const $ = id => document.getElementById(id);
   const LS = {
     get: (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? d; } catch { return d; } },
@@ -89,7 +89,7 @@ const SC = (() => {
     const assign = (t, d) => { t.box = d.box; t.score = d.score; t.last = now; t.hist.push([now, t.box[0] + t.box[2] / 2, t.box[1] + t.box[3] / 2, t.box[2], t.box[3]]); if (t.hist.length > 60) t.hist.shift(); d.id = t.id; };
     for (const [, di, tid] of pairs) { if (usedD.has(di) || usedT.has(tid)) continue; usedD.add(di); usedT.add(tid); assign(S.tracks.get(tid), dets[di]); }
     dets.forEach((d, di) => { if (usedD.has(di)) return; const t = { id: S.nextId++, cls: d.cls, box: d.box, first: now, last: now, hist: [], flags: {}, pose: null, poseHist: [] }; S.tracks.set(t.id, t); assign(t, d); });
-    for (const [id, t] of S.tracks) if (now - t.last > 2000) S.tracks.delete(id);
+    for (const [id, t] of S.tracks) if (now - t.last > 3500) S.tracks.delete(id);
     return [...S.tracks.values()].filter(t => t.last === now);
   }
 
@@ -157,7 +157,7 @@ const SC = (() => {
         nightC.width = S.video.videoWidth; nightC.height = S.video.videoHeight;
         nightX.filter = 'brightness(1.8) contrast(1.4)'; nightX.drawImage(S.video, 0, 0); src = nightC;
       }
-      const minConf = S.dark ? G.conf * 0.75 : G.conf;
+      const minConf = S.dark ? Math.min(G.conf, 0.3) : G.conf;   // v9: fixed 0.3 at night
       const preds = await S.coco.detect(src, 20, Math.min(minConf, 0.3));
       const dets = preds.map(p => ({ cls: p.class, score: p.score, box: [p.bbox[0] / S.vx, p.bbox[1] / S.vy, p.bbox[2] / S.vx, p.bbox[3] / S.vy] }))
         .filter(d => d.score >= (d.cls === 'person' ? minConf : minConf * 0.9));

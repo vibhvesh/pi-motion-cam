@@ -20,14 +20,15 @@ detector:
   confidence: 0.4            # mobilenet_ssd score / HOG weight threshold
   interval_seconds: 0.3      # detection rate while something is moving/tracked
   idle_interval_seconds: 2.0 # detection rate when idle (keeps loitering/occupancy/zones alive)
-  track_lost_seconds: 2.0
+  track_lost_seconds: 3.5
   detect_width: 640          # HOG only
   win_stride: [8, 8]
   scale: 1.05
   night:
     dark_brightness: 50      # lores mean brightness below this = night
     enhance: true            # CLAHE contrast boost before detection at night
-    confidence_scale: 0.75   # lower the confidence threshold at night
+    confidence: 0.3          # detector confidence used at night (overrides confidence_scale)
+    confidence_scale: 0.75   # fallback: night threshold = confidence * this
 
 pose:                        # optional MoveNet (./install.sh --pose); improves fall + fight
   enabled: false
@@ -91,14 +92,14 @@ modules:
 
   fall:                      # 4. fall detection (pose if enabled, else box aspect ratio + centroid drop)
     enabled: false
-    down_seconds: 5
-    drop_fraction: 0.25
+    down_seconds: 2.5
+    drop_fraction: 0.15
     cooldown_seconds: 30
 
   fight:                     # 5. EXPERIMENTAL fight/violence heuristic
     enabled: false
     hold_seconds: 3
-    energy_threshold: 0.15   # pose: body-heights/second; no pose: motion fraction in the pair's box
+    energy_threshold: 0.08   # pose: body-heights/second; no pose: motion fraction in the pair's box
     proximity: 1.0
     cooldown_seconds: 60
 
@@ -131,8 +132,10 @@ modules:
     dark_threshold: 15
     flat_std: 8
     blur_threshold: 15
-    scene_change: 0.5
-    hold_seconds: 3
+    scene_change: 0.3
+    structure_change: 0.35   # thumbnail correlation below -> camera moved/turned
+    blur_ratio: 0.25         # sharpness below this x the reference -> blurred
+    hold_seconds: 1.5
     cooldown_seconds: 120
 
   fire_smoke:                # 10. EXPERIMENTAL fire/smoke color+flicker heuristic (not a smoke alarm!)
@@ -145,10 +148,15 @@ modules:
 
   plates:                    # 12. vehicles & number plates (needs detector.type: mobilenet_ssd + ./install.sh --ocr)
     enabled: false
-    classes: [car, bus, motorbike]
+    classes: [car, bus, truck, motorbike]
     line: null                        # optional direction line [[x,y],[x,y]]; else IN = first read, OUT = not seen
-    tries: 4                          # OCR attempts per vehicle (retries on later frames)
-    min_confidence: 55
+    tries: 8                          # OCR attempts per vehicle (retries on later frames)
+    min_confidence: 40                # Indian-format reads are accepted at any confidence
+    votes: 2                          # same text read N times on one vehicle -> logged (majority vote)
+    char_height: 32                   # upscale plate crops so characters are ~32 px tall for OCR
+    plate_detector: classic           # classic (edges+color) | onnx (YOLOv9-t plate model, ./install.sh --alpr)
+    ocr_engine: tesseract             # tesseract | fast_plate_ocr (ONNX, ./install.sh --alpr)
+    min_plate_width: 60               # onnx detector: ignore plates narrower than this (px, main frame)
     indian_only: false                # only accept plates matching the Indian format (MH12AB1234 / 22BH1234AA)
     out_after_minutes: 2
     watchlist: []                     # e.g. [MH12AB1234] -> alert severity
